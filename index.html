@@ -314,6 +314,41 @@
     cursor:pointer;
   }
   .rel-word:active, .suggestion:active{background:var(--accent-soft);}
+  .trans-block{margin-top:4px;}
+  .trans-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:9px 0;
+    border-bottom:1px solid var(--line);
+  }
+  .trans-label{
+    flex:0 0 62px;
+    font-size:12.5px;
+    color:var(--ink-soft);
+  }
+  .trans-text{
+    flex:1;
+    font-size:19px;
+    line-height:1.5;
+    word-break:break-word;
+  }
+  .trans-inline{
+    margin-top:10px;
+    padding-top:8px;
+    border-top:1px dotted var(--line);
+    display:flex;
+    flex-direction:column;
+    gap:3px;
+    font-size:15px;
+  }
+  .trans-inline b{
+    font-size:11.5px;
+    color:var(--ink-soft);
+    font-weight:600;
+    margin-right:6px;
+  }
+
   .suggestions{display:flex; flex-wrap:wrap; gap:7px; margin-top:4px;}
   .suggestion{border-color:var(--accent); color:var(--accent);}
   .pending-note{
@@ -1046,6 +1081,105 @@
     window.speechSynthesis.onvoiceschanged = pickBritishVoice;
   }
 
+  // ---- Hindi + Punjabi translation (MyMemory: no key, CORS-enabled).
+  // Anonymous quota is per-IP and counted in characters, so results are cached
+  // on the device permanently — a word is never translated twice.
+  var TRANS_CACHE_KEY = "kosh_translations_v1";
+  var transCache = (function(){
+    try{ return JSON.parse(localStorage.getItem(TRANS_CACHE_KEY)) || {}; }
+    catch(e){ return {}; }
+  })();
+
+  function looksLikeError(text){
+    if(!text){ return true; }
+    var t = text.toUpperCase();
+    return t.indexOf("MYMEMORY WARNING") !== -1 ||
+           t.indexOf("QUERY LENGTH LIMIT") !== -1 ||
+           t.indexOf("INVALID") !== -1 ||
+           t.indexOf("NO QUERY") !== -1;
+  }
+
+  function fetchTranslations(word){
+    var key = word.trim().toLowerCase();
+    if(transCache[key]){ return Promise.resolve(transCache[key]); }
+
+    function one(target){
+      var url = "https://api.mymemory.translated.net/get?q=" +
+                encodeURIComponent(key) + "&langpair=en|" + target;
+      return fetch(url)
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(d){
+          if(!d || !d.responseData){ return ""; }
+          var text = d.responseData.translatedText || "";
+          if(looksLikeError(text)){ return ""; }
+          // MyMemory echoes the input back when it has no match.
+          if(text.trim().toLowerCase() === key){ return ""; }
+          return text.trim();
+        })
+        .catch(function(){ return ""; });
+    }
+
+    return Promise.all([one("hi"), one("pa")]).then(function(r){
+      var out = { hi: r[0], pa: r[1] };
+      if(out.hi || out.pa){
+        transCache[key] = out;
+        try{ localStorage.setItem(TRANS_CACHE_KEY, JSON.stringify(transCache)); }catch(e){}
+      }
+      return out;
+    });
+  }
+
+  function speakIn(text, langCode){
+    if(!("speechSynthesis" in window) || !text){ return; }
+    try{
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = langCode;
+      var voices = window.speechSynthesis.getVoices() || [];
+      var v = voices.filter(function(x){ return x.lang && x.lang.replace("_","-").toLowerCase() === langCode.toLowerCase(); })[0];
+      if(v){ u.voice = v; }
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+    }catch(e){}
+  }
+
+  function appendTranslations(word, trans){
+    if(!trans || (!trans.hi && !trans.pa)){ return; }
+    var block = document.createElement("div");
+    block.className = "trans-block";
+    var html = '<div class="block-divider"><span>Translation</span></div>';
+
+    function row(label, text, langCode){
+      if(!text){ return ""; }
+      return '<div class="trans-row">' +
+               '<span class="trans-label">' + label + '</span>' +
+               '<span class="trans-text">' + escapeHtml(text) + '</span>' +
+               '<button class="audio-btn small" data-speak-text="' + escapeHtml(text) +
+                 '" data-speak-lang="' + langCode + '" title="Hear it">\u25B6</button>' +
+             '</div>';
+    }
+    html += row("\u0939\u093F\u0928\u094D\u0926\u0940", trans.hi, "hi-IN");
+    html += row("\u0A2A\u0A70\u0A1C\u0A3E\u0A2C\u0A40", trans.pa, "pa-IN");
+    html += '<div class="source-tag">Machine translation \u2014 treat as a hint, not a definition</div>';
+
+    block.innerHTML = html;
+    resultSlot.appendChild(block);
+
+    Array.prototype.forEach.call(block.querySelectorAll("[data-speak-text]"), function(b){
+      b.addEventListener("click", function(){
+        speakIn(b.getAttribute("data-speak-text"), b.getAttribute("data-speak-lang"));
+      });
+    });
+
+    // Keep the translation with the saved word so it shows up during review.
+    var id = wordId(word, "en");
+    var existing = words.find(function(w){ return w.id === id; });
+    if(existing){
+      existing.translations = trans;
+      saveWords(words);
+    }
+  }
+
   function speak(word){
     if(!("speechSynthesis" in window)){ return false; }
     try{
@@ -1122,6 +1256,11 @@
 
     var offlineShown = false;
 
+    // Translations run alongside everything else; they're appended last so the
+    // block order on screen stays offline -> online -> translation.
+    var transPromise = (navigator.onLine === false || apiCodeForLang(lang) !== "en")
+      ? null : fetchTranslations(word);
+
     // Kick off the online requests immediately — they're the slow part, so they
     // must not wait on the offline read.
     var onlinePromise = (navigator.onLine === false) ? null : Promise.all([
@@ -1169,6 +1308,9 @@
         } else {
           renderEntry(merged, lang, { showSave: true });
         }
+        if(transPromise){
+          transPromise.then(function(t){ appendTranslations(word, t); });
+        }
         return;
       }
 
@@ -1176,6 +1318,9 @@
       if(offlineShown){
         var note = document.getElementById("pending-note");
         if(note){ note.textContent = "No additional entry found online."; }
+        if(transPromise){
+          transPromise.then(function(t){ appendTranslations(word, t); });
+        }
         return;
       }
 
@@ -1485,7 +1630,7 @@
       html += '<button class="word-row-del" data-id="' + w.id + '">Remove</button>';
       html += '</div>';
       html += '</div>';
-      html += '<div class="word-row-body">' + renderMeaningsHtml(w.meanings) + '</div>';
+      html += '<div class="word-row-body">' + renderMeaningsHtml(w.meanings, w.translations) + '</div>';
       html += '</li>';
     });
     if(currentHeading !== null){ html += '</ul>'; }
@@ -1517,7 +1662,7 @@
     });
   }
 
-  function renderMeaningsHtml(meanings){
+  function renderMeaningsHtml(meanings, translations){
     var html = "";
     (meanings || []).forEach(function(m){
       html += '<div class="pos">' + escapeHtml(m.partOfSpeech || "") + '</div>';
@@ -1532,6 +1677,12 @@
         html += '<div class="synonyms"><b>Synonyms:</b> ' + m.synonyms.map(escapeHtml).join(", ") + '</div>';
       }
     });
+    if(translations && (translations.hi || translations.pa)){
+      html += '<div class="trans-inline">';
+      if(translations.hi){ html += '<span><b>हिन्दी</b> ' + escapeHtml(translations.hi) + '</span>'; }
+      if(translations.pa){ html += '<span><b>ਪੰਜਾਬੀ</b> ' + escapeHtml(translations.pa) + '</span>'; }
+      html += '</div>';
+    }
     return html;
   }
 
@@ -1583,7 +1734,7 @@
     html += '<div class="review-word">' + escapeHtml(w.word) + '</div>';
     html += '<button class="audio-btn review-speak" id="review-speak" title="Hear it">▶</button>';
     html += '<div class="review-hint" id="review-hint">Tap the card to reveal the definition</div>';
-    html += '<div class="review-back" id="review-back">' + renderMeaningsHtml(w.meanings) + '</div>';
+    html += '<div class="review-back" id="review-back">' + renderMeaningsHtml(w.meanings, w.translations) + '</div>';
     html += '</div>';
     html += '<div class="review-buttons" id="review-buttons" style="visibility:hidden;">';
     html += '<button class="btn-again" id="btn-again">Still learning</button>';
