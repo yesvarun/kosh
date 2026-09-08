@@ -314,7 +314,13 @@
     cursor:pointer;
   }
   .rel-word:active, .suggestion:active{background:var(--accent-soft);}
-  .trans-block{margin-top:4px;}
+  .trans-block{
+    margin:0 0 6px 0;
+    padding-bottom:12px;
+    border-bottom:2px solid var(--line);
+  }
+  .trans-block .block-divider{margin-top:0;}
+  .trans-foot{border-top:none; margin-top:8px; padding-top:0;}
   .trans-row{
     display:flex;
     align-items:center;
@@ -1148,7 +1154,6 @@
     var block = document.createElement("div");
     block.className = "trans-block";
     var html = '<div class="block-divider"><span>Translation</span></div>';
-
     function row(label, text, langCode){
       if(!text){ return ""; }
       return '<div class="trans-row">' +
@@ -1160,10 +1165,12 @@
     }
     html += row("\u0939\u093F\u0928\u094D\u0926\u0940", trans.hi, "hi-IN");
     html += row("\u0A2A\u0A70\u0A1C\u0A3E\u0A2C\u0A40", trans.pa, "pa-IN");
-    html += '<div class="source-tag">Machine translation \u2014 treat as a hint, not a definition</div>';
+    html += '<div class="source-tag trans-foot">Machine translation \u2014 treat as a hint, not a definition</div>';
 
     block.innerHTML = html;
-    resultSlot.appendChild(block);
+    var slot = transSlot();
+    slot.innerHTML = '';
+    slot.appendChild(block);
 
     Array.prototype.forEach.call(block.querySelectorAll("[data-speak-text]"), function(b){
       b.addEventListener("click", function(){
@@ -1253,6 +1260,7 @@
     word = (word || "").trim();
     if(!word){ return; }
     lang = lang || langSelect.value;
+    resetSlots();
 
     var offlineShown = false;
 
@@ -1279,7 +1287,7 @@
           pending: onlinePromise !== null
         });
       } else if(!offlineShown && onlinePromise){
-        resultSlot.innerHTML = '<p class="status">Looking up \u201c' + escapeHtml(word) + '\u201d\u2026</p>';
+        entrySlot().innerHTML = '<p class="status">Looking up \u201c' + escapeHtml(word) + '\u201d\u2026</p>';
       }
     });
 
@@ -1287,7 +1295,7 @@
       // Offline device: whatever the local copy gave us is the whole answer.
       fetchLocal(word, lang).then(function(local){
         if(local.status !== "found"){
-          resultSlot.innerHTML = '<p class="status error">You\u2019re offline and \u201c' + escapeHtml(word) + '\u201d isn\u2019t in the downloaded dictionary.</p>';
+          entrySlot().innerHTML = '<p class="status error">You\u2019re offline and \u201c' + escapeHtml(word) + '\u201d isn\u2019t in the downloaded dictionary.</p>';
           currentEntryData = null;
         }
       });
@@ -1327,22 +1335,22 @@
       var networkDown = res[0].status === "error" && res[1].status === "error";
       return fetchSuggestions(word).then(function(suggestions){
         if(networkDown && !suggestions.length){
-          resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach any dictionary. Check your connection and try again.</p>';
+          entrySlot().innerHTML = '<p class="status error">Couldn\u2019t reach any dictionary. Check your connection and try again.</p>';
         } else if(suggestions.length){
           var html = '<p class="status error">No entry for \u201c' + escapeHtml(word) + '\u201d. Did you mean:</p><div class="suggestions">';
           suggestions.forEach(function(s){
             html += '<button class="suggestion" data-word="' + escapeHtml(s) + '">' + escapeHtml(s) + '</button>';
           });
           html += '</div>';
-          resultSlot.innerHTML = html;
-          Array.prototype.forEach.call(resultSlot.querySelectorAll(".suggestion"), function(b){
+          entrySlot().innerHTML = html;
+          Array.prototype.forEach.call(entrySlot().querySelectorAll(".suggestion"), function(b){
             b.addEventListener("click", function(){
               searchInput.value = b.getAttribute("data-word");
               lookup(b.getAttribute("data-word"), lang);
             });
           });
         } else {
-          resultSlot.innerHTML = '<p class="status error">No entry found for \u201c' + escapeHtml(word) + '\u201d.</p>';
+          entrySlot().innerHTML = '<p class="status error">No entry found for \u201c' + escapeHtml(word) + '\u201d.</p>';
         }
         currentEntryData = null;
       });
@@ -1354,6 +1362,30 @@
       document.getElementById("protocol-warning-slot").innerHTML =
         '<div class="shared-note" style="border:1px solid var(--danger); color:var(--danger);">Opened as a local file — dictionary lookups and the share sheet won\u2019t work here. Open Kosh from its deployed https:// link instead.</div>';
     }
+  }
+
+  // The result area is split into two fixed slots so blocks can arrive in any
+  // order without overwriting each other: translations sit above the entry.
+  function transSlot(){
+    var t = document.getElementById("trans-slot");
+    if(!t){
+      t = document.createElement("div");
+      t.id = "trans-slot";
+      resultSlot.insertBefore(t, resultSlot.firstChild);
+    }
+    return t;
+  }
+  function entrySlot(){
+    var e = document.getElementById("entry-slot");
+    if(!e){
+      e = document.createElement("div");
+      e.id = "entry-slot";
+      resultSlot.appendChild(e);
+    }
+    return e;
+  }
+  function resetSlots(){
+    resultSlot.innerHTML = '<div id="trans-slot"></div><div id="entry-slot"></div>';
   }
 
   // Builds the markup for one entry. Used for both the instant offline block and
@@ -1476,14 +1508,15 @@
     };
     saveEntry(currentEntryData, lang);
 
-    resultSlot.innerHTML = buildEntryHtml(entry, {
+    var slot = entrySlot();
+    slot.innerHTML = buildEntryHtml(entry, {
       showSave: opts.showSave !== false
     });
     if(opts.pending){
-      resultSlot.insertAdjacentHTML("beforeend",
+      slot.insertAdjacentHTML("beforeend",
         '<div class="pending-note" id="pending-note">Checking Wiktionary for a fuller entry\u2026</div>');
     }
-    bindEntry(resultSlot, entry, lang);
+    bindEntry(slot, entry, lang);
   }
 
   // Appends the online entry below the offline one, separated by a rule.
@@ -1495,7 +1528,7 @@
     block.className = "online-block";
     block.innerHTML = '<div class="block-divider"><span>' + escapeHtml(entry.source || "Online") + '</span></div>'
                     + buildEntryHtml(entry, { hideHead: true, showSave: true });
-    resultSlot.appendChild(block);
+    entrySlot().appendChild(block);
 
     // Upgrade what's stored: the online entry is richer than the offline stub.
     var id = wordId(entry.word, lang);
