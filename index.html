@@ -204,6 +204,29 @@
   .rel-word:active, .suggestion:active{background:var(--accent-soft);}
   .suggestions{display:flex; flex-wrap:wrap; gap:7px; margin-top:4px;}
   .suggestion{border-color:var(--accent); color:var(--accent);}
+  .pending-note{
+    margin-top:18px;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    font-style:italic;
+  }
+  .block-divider{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:26px 0 4px 0;
+    font-size:11.5px;
+    color:var(--ink-soft);
+  }
+  .block-divider::before,
+  .block-divider::after{
+    content:"";
+    flex:1;
+    height:1px;
+    background:var(--line);
+  }
+  .entry-compact{border-top:none;}
+  .online-block .entry{border-top:none; padding-top:4px;}
 
   .entry{border-top:1px solid var(--line); padding-top:18px;}
   .entry-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
@@ -816,13 +839,34 @@
     word = (word || "").trim();
     if(!word){ return; }
     lang = lang || langSelect.value;
-    resultSlot.innerHTML = '<p class="status">Looking up \u201c' + escapeHtml(word) + '\u201d\u2026</p>';
 
-    // If the phone is offline, don't waste time on network calls.
-    if(navigator.onLine === false){
+    var offlineShown = false;
+
+    // Kick off the online requests immediately — they're the slow part, so they
+    // must not wait on the offline read.
+    var onlinePromise = (navigator.onLine === false) ? null : Promise.all([
+      fetchWiktionary(word, lang),
+      fetchDictApi(word, lang),
+      fetchRelated(word)
+    ]);
+
+    // Offline shard usually resolves in a few milliseconds — paint it at once.
+    fetchLocal(word, lang).then(function(local){
+      if(local.status === "found" && !offlineShown){
+        offlineShown = true;
+        renderEntry(local.entry, lang, {
+          showSave: true,
+          pending: onlinePromise !== null
+        });
+      } else if(!offlineShown && onlinePromise){
+        resultSlot.innerHTML = '<p class="status">Looking up \u201c' + escapeHtml(word) + '\u201d\u2026</p>';
+      }
+    });
+
+    if(!onlinePromise){
+      // Offline device: whatever the local copy gave us is the whole answer.
       fetchLocal(word, lang).then(function(local){
-        if(local.status === "found"){ renderEntry(local.entry, lang); }
-        else {
+        if(local.status !== "found"){
           resultSlot.innerHTML = '<p class="status error">You\u2019re offline and \u201c' + escapeHtml(word) + '\u201d isn\u2019t in the downloaded dictionary.</p>';
           currentEntryData = null;
         }
@@ -830,49 +874,48 @@
       return;
     }
 
-    Promise.all([
-      fetchWiktionary(word, lang),
-      fetchDictApi(word, lang),
-      fetchRelated(word)
-    ]).then(function(res){
+    onlinePromise.then(function(res){
       var merged = mergeEntries(res[0], res[1], word);
       var related = res[2];
 
       if(merged){
         merged.related = related;
-        renderEntry(merged, lang);
+        if(offlineShown){
+          appendOnlineEntry(merged, lang);
+        } else {
+          renderEntry(merged, lang, { showSave: true });
+        }
         return;
       }
 
-      // Nothing online. Try the offline copy, then offer spelling suggestions.
-      return fetchLocal(word, lang).then(function(local){
-        if(local.status === "found"){
-          local.entry.related = related;
-          renderEntry(local.entry, lang);
-          return;
+      // Online found nothing.
+      if(offlineShown){
+        var note = document.getElementById("pending-note");
+        if(note){ note.textContent = "No additional entry found online."; }
+        return;
+      }
+
+      var networkDown = res[0].status === "error" && res[1].status === "error";
+      return fetchSuggestions(word).then(function(suggestions){
+        if(networkDown && !suggestions.length){
+          resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach any dictionary. Check your connection and try again.</p>';
+        } else if(suggestions.length){
+          var html = '<p class="status error">No entry for \u201c' + escapeHtml(word) + '\u201d. Did you mean:</p><div class="suggestions">';
+          suggestions.forEach(function(s){
+            html += '<button class="suggestion" data-word="' + escapeHtml(s) + '">' + escapeHtml(s) + '</button>';
+          });
+          html += '</div>';
+          resultSlot.innerHTML = html;
+          Array.prototype.forEach.call(resultSlot.querySelectorAll(".suggestion"), function(b){
+            b.addEventListener("click", function(){
+              searchInput.value = b.getAttribute("data-word");
+              lookup(b.getAttribute("data-word"), lang);
+            });
+          });
+        } else {
+          resultSlot.innerHTML = '<p class="status error">No entry found for \u201c' + escapeHtml(word) + '\u201d.</p>';
         }
-        var networkDown = res[0].status === "error" && res[1].status === "error";
-        return fetchSuggestions(word).then(function(suggestions){
-          if(networkDown && !suggestions.length){
-            resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach any dictionary. Check your connection and try again.</p>';
-          } else if(suggestions.length){
-            var html = '<p class="status error">No entry for \u201c' + escapeHtml(word) + '\u201d. Did you mean:</p><div class="suggestions">';
-            suggestions.forEach(function(s){
-              html += '<button class="suggestion" data-word="' + escapeHtml(s) + '">' + escapeHtml(s) + '</button>';
-            });
-            html += '</div>';
-            resultSlot.innerHTML = html;
-            Array.prototype.forEach.call(resultSlot.querySelectorAll(".suggestion"), function(b){
-              b.addEventListener("click", function(){
-                searchInput.value = b.getAttribute("data-word");
-                lookup(b.getAttribute("data-word"), lang);
-              });
-            });
-          } else {
-            resultSlot.innerHTML = '<p class="status error">No entry found for \u201c' + escapeHtml(word) + '\u201d.</p>';
-          }
-          currentEntryData = null;
-        });
+        currentEntryData = null;
       });
     });
   }
@@ -884,42 +927,41 @@
     }
   }
 
-  function renderEntry(entry, lang){
+  // Builds the markup for one entry. Used for both the instant offline block and
+  // the online block that lands underneath it a moment later.
+  function buildEntryHtml(entry, opts){
+    opts = opts || {};
     var phonetic = entry.phonetic || "";
     var audio = entry.audio || "";
     var meanings = entry.meanings || [];
 
-    currentEntryData = {
-      word: entry.word,
-      lang: lang,
-      phonetic: phonetic,
-      audio: audio,
-      meanings: meanings
-    };
+    var html = '<div class="entry' + (opts.compact ? ' entry-compact' : '') + '">';
 
-    var html = '<div class="entry">';
-    html += '<div class="entry-head"><h2 class="entry-word">' + escapeHtml(entry.word) + '</h2>';
-    if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
-    if(audio){ html += '<button class="audio-btn" id="play-audio-btn" title="Play pronunciation">▶</button>'; }
-    html += '</div>';
+    if(!opts.hideHead){
+      html += '<div class="entry-head"><h2 class="entry-word">' + escapeHtml(entry.word) + '</h2>';
+      if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
+      if(audio){ html += '<button class="audio-btn" title="Play pronunciation">\u25B6</button>'; }
+      html += '</div>';
+    } else if(phonetic || audio){
+      html += '<div class="entry-head">';
+      if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
+      if(audio){ html += '<button class="audio-btn" title="Play pronunciation">\u25B6</button>'; }
+      html += '</div>';
+    }
 
     meanings.forEach(function(m){
       html += '<div class="pos">' + escapeHtml(m.partOfSpeech || "") + '</div>';
       html += '<ol class="defs">';
-      m.definitions.forEach(function(d){
+      (m.definitions || []).forEach(function(d){
         html += '<li>' + escapeHtml(d.definition);
-        if(d.example){ html += '<div class="example">“' + escapeHtml(d.example) + '”</div>'; }
+        if(d.example){ html += '<div class="example">\u201c' + escapeHtml(d.example) + '\u201d</div>'; }
         html += '</li>';
       });
       html += '</ol>';
-      if(m.synonyms.length){
+      if(m.synonyms && m.synonyms.length){
         html += '<div class="synonyms"><b>Synonyms:</b> ' + m.synonyms.map(escapeHtml).join(", ") + '</div>';
       }
     });
-
-    // Every word you look up is saved automatically — no tap needed.
-    saveEntry(currentEntryData, lang);
-    var already = true;
 
     var rel = entry.related || {};
     function relGroup(label, list){
@@ -936,25 +978,97 @@
     if(entry.source){
       html += '<div class="source-tag">Source: ' + escapeHtml(entry.source === "offline" ? "offline dictionary on this phone" : entry.source) + '</div>';
     }
-    html += '<button class="save-btn' + (already ? ' saved' : '') + '" id="save-btn">' + (already ? "Saved for review — tap to remove" : "Save for later") + '</button>';
+    if(opts.showSave){
+      html += '<button class="save-btn saved" data-role="save">Saved for review \u2014 tap to remove</button>';
+    }
     html += '</div>';
+    return html;
+  }
 
-    resultSlot.innerHTML = html;
-
-    if(audio){
-      document.getElementById("play-audio-btn").addEventListener("click", function(){
+  // Attaches handlers to whatever was just inserted into `container`.
+  function bindEntry(container, entry, lang){
+    var audio = entry.audio || "";
+    Array.prototype.forEach.call(container.querySelectorAll(".audio-btn"), function(b){
+      b.addEventListener("click", function(){
         audioPlayer.src = audio;
         audioPlayer.play();
       });
-    }
-    Array.prototype.forEach.call(resultSlot.querySelectorAll(".rel-word"), function(b){
+    });
+    Array.prototype.forEach.call(container.querySelectorAll(".rel-word"), function(b){
       b.addEventListener("click", function(){
         var w = b.getAttribute("data-word");
         searchInput.value = w;
         lookup(w, lang);
       });
     });
-    document.getElementById("save-btn").addEventListener("click", toggleSaveCurrent);
+    Array.prototype.forEach.call(container.querySelectorAll('[data-role="save"]'), function(b){
+      b.addEventListener("click", function(){
+        if(!currentEntryData){ return; }
+        var id = wordId(currentEntryData.word, currentEntryData.lang);
+        var idx = words.findIndex(function(w){ return w.id === id; });
+        if(idx >= 0){
+          words.splice(idx, 1);
+          saveWords(words);
+          b.textContent = "Save for later";
+          b.classList.remove("saved");
+        } else {
+          saveEntry(currentEntryData, currentEntryData.lang);
+          b.textContent = "Saved for review \u2014 tap to remove";
+          b.classList.add("saved");
+        }
+        updateDueBadge();
+      });
+    });
+  }
+
+  // Full replace — used when there's nothing on screen yet.
+  function renderEntry(entry, lang, opts){
+    opts = opts || {};
+    currentEntryData = {
+      word: entry.word,
+      lang: lang,
+      phonetic: entry.phonetic || "",
+      audio: entry.audio || "",
+      meanings: entry.meanings || []
+    };
+    saveEntry(currentEntryData, lang);
+
+    resultSlot.innerHTML = buildEntryHtml(entry, {
+      showSave: opts.showSave !== false
+    });
+    if(opts.pending){
+      resultSlot.insertAdjacentHTML("beforeend",
+        '<div class="pending-note" id="pending-note">Checking Wiktionary for a fuller entry\u2026</div>');
+    }
+    bindEntry(resultSlot, entry, lang);
+  }
+
+  // Appends the online entry below the offline one, separated by a rule.
+  function appendOnlineEntry(entry, lang){
+    var note = document.getElementById("pending-note");
+    if(note){ note.parentNode.removeChild(note); }
+
+    var block = document.createElement("div");
+    block.className = "online-block";
+    block.innerHTML = '<div class="block-divider"><span>' + escapeHtml(entry.source || "Online") + '</span></div>'
+                    + buildEntryHtml(entry, { hideHead: true, showSave: true });
+    resultSlot.appendChild(block);
+
+    // Upgrade what's stored: the online entry is richer than the offline stub.
+    var id = wordId(entry.word, lang);
+    var existing = words.find(function(w){ return w.id === id; });
+    if(existing){
+      existing.meanings = entry.meanings || existing.meanings;
+      existing.phonetic = existing.phonetic || entry.phonetic || "";
+      existing.audio = existing.audio || entry.audio || "";
+      saveWords(words);
+    }
+    currentEntryData = {
+      word: entry.word, lang: lang,
+      phonetic: entry.phonetic || "", audio: entry.audio || "",
+      meanings: entry.meanings || []
+    };
+    bindEntry(block, entry, lang);
   }
 
   function saveEntry(entry, lang){
