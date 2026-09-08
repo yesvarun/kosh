@@ -1,4 +1,5 @@
-var CACHE_NAME = "kosh-shell-v1";
+// Bump this string on every deploy — it forces old caches out.
+var CACHE_NAME = "kosh-shell-v3";
 var SHELL_FILES = [
   "./",
   "./index.html",
@@ -28,30 +29,55 @@ self.addEventListener("activate", function(event){
   self.clients.claim();
 });
 
-// App shell: cache-first (works offline).
-// Dictionary API calls: always go to the network (never cached, and the fetch
-// handler ignores them) so lookups stay fresh.
 self.addEventListener("fetch", function(event){
   var url = event.request.url;
-  if(url.indexOf("api.dictionaryapi.dev") !== -1 || url.indexOf("wiktionary.org") !== -1){
-    return; // online lookups: always straight to the network, never cached
-  }
-  if(url.indexOf("/dict/") !== -1){
-    return; // offline dictionary shards: managed by the app in the kosh-dict cache
-  }
-  if(event.request.method !== "GET"){ return; }
+  var req = event.request;
 
-  event.respondWith(
-    caches.match(event.request).then(function(cached){
-      if(cached){ return cached; }
-      return fetch(event.request).then(function(response){
-        if(response && response.status === 200 && response.type === "basic"){
+  // Online dictionary lookups: straight to the network, never cached.
+  if(url.indexOf("api.dictionaryapi.dev") !== -1 ||
+     url.indexOf("wiktionary.org") !== -1 ||
+     url.indexOf("datamuse.com") !== -1){
+    return;
+  }
+  // Offline dictionary shards: the app manages these in its own cache.
+  if(url.indexOf("/dict/") !== -1){ return; }
+  if(req.method !== "GET"){ return; }
+
+  // HTML and JS: NETWORK FIRST. Cache-first here was the bug that pinned the app
+  // to whatever version was installed first — new deploys were never picked up.
+  var isShell = req.mode === "navigate" ||
+                url.indexOf(".html") !== -1 ||
+                url.indexOf(".js") !== -1 ||
+                url.indexOf(".json") !== -1;
+
+  if(isShell){
+    event.respondWith(
+      fetch(req).then(function(response){
+        if(response && response.status === 200){
           var copy = response.clone();
-          caches.open(CACHE_NAME).then(function(cache){ cache.put(event.request, copy); });
+          caches.open(CACHE_NAME).then(function(c){ c.put(req, copy); });
         }
         return response;
       }).catch(function(){
-        return caches.match("./index.html");
+        // Offline: fall back to the last good copy.
+        return caches.match(req).then(function(hit){
+          return hit || caches.match("./index.html");
+        });
+      })
+    );
+    return;
+  }
+
+  // Everything else (icons): cache first is fine.
+  event.respondWith(
+    caches.match(req).then(function(cached){
+      if(cached){ return cached; }
+      return fetch(req).then(function(response){
+        if(response && response.status === 200 && response.type === "basic"){
+          var copy = response.clone();
+          caches.open(CACHE_NAME).then(function(c){ c.put(req, copy); });
+        }
+        return response;
       });
     })
   );

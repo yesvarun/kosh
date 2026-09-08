@@ -171,6 +171,34 @@
     padding-top:8px;
     border-top:1px dotted var(--line);
   }
+  .rel-block{
+    margin-top:20px;
+    padding-top:14px;
+    border-top:1px solid var(--line);
+  }
+  .rel-group{margin-bottom:12px;}
+  .rel-label{
+    font-family:var(--serif);
+    font-style:italic;
+    font-size:13.5px;
+    color:var(--accent);
+    display:block;
+    margin-bottom:6px;
+  }
+  .rel-words{display:flex; flex-wrap:wrap; gap:6px;}
+  .rel-word, .suggestion{
+    border:1px solid var(--line);
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    font-size:13px;
+    padding:6px 11px;
+    border-radius:14px;
+    cursor:pointer;
+  }
+  .rel-word:active, .suggestion:active{background:var(--accent-soft);}
+  .suggestions{display:flex; flex-wrap:wrap; gap:7px; margin-top:4px;}
+  .suggestion{border-color:var(--accent); color:var(--accent);}
 
   .entry{border-top:1px solid var(--line); padding-top:18px;}
   .entry-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
@@ -647,13 +675,43 @@
     return (div.textContent || div.innerText || "").trim();
   }
 
-  // --- Source 1: dictionaryapi.dev — has phonetics/audio, but its word list
-  // is a small hobby dataset and is missing plenty of ordinary words (e.g. "leave").
-  function fetchPrimary(word, lang){
-    var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
+  // ================= online sources =================
+  // Wiktionary is the lead source: it is by far the most comprehensive free
+  // dictionary (etymology-aware, covers slang, inflected forms, technical terms).
+  // dictionaryapi.dev is kept ONLY for its IPA + audio, which Wiktionary's REST
+  // endpoint doesn't provide. Datamuse adds synonyms/antonyms/related words and
+  // spelling suggestions. All three run in parallel and are merged.
+
+  function fetchWiktionary(word, lang){
+    var url = "https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word.toLowerCase());
     return fetch(url).then(function(res){
       if(res.status === 404){ return {status:"not-found"}; }
-      if(!res.ok){ return {status:"error", error:new Error("primary-http-" + res.status)}; }
+      if(!res.ok){ return {status:"error"}; }
+      return res.json().then(function(data){
+        var entries = data[apiCodeForLang(lang)];
+        if(!entries || !entries.length){ return {status:"not-found"}; }
+        var meanings = entries.slice(0,8).map(function(m){
+          return {
+            partOfSpeech: m.partOfSpeech || "",
+            definitions: (m.definitions || []).slice(0,6).map(function(d){
+              var example = "";
+              if(d.parsedExamples && d.parsedExamples.length){ example = stripHtml(d.parsedExamples[0].example); }
+              else if(d.examples && d.examples.length){ example = stripHtml(d.examples[0]); }
+              return { definition: stripHtml(d.definition), example: example };
+            }).filter(function(d){ return d.definition; }),
+            synonyms: []
+          };
+        }).filter(function(m){ return m.definitions.length; });
+        if(!meanings.length){ return {status:"not-found"}; }
+        return { status:"found", entry: { word: word, phonetic:"", audio:"", meanings: meanings } };
+      });
+    }).catch(function(){ return {status:"error"}; });
+  }
+
+  function fetchDictApi(word, lang){
+    var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
+    return fetch(url).then(function(res){
+      if(!res.ok){ return {status:"not-found"}; }
       return res.json().then(function(data){
         var e = data[0];
         var phonetic = e.phonetic || "";
@@ -673,74 +731,126 @@
         });
         return { status:"found", entry: { word: e.word, phonetic: phonetic, audio: audio, meanings: meanings } };
       });
-    }).catch(function(err){ return {status:"error", error: err}; });
+    }).catch(function(){ return {status:"error"}; });
   }
 
-  // --- Source 2 (fallback): Wiktionary's public REST API — no phonetics/audio,
-  // but a far larger, actively maintained word list. Used only when source 1 misses.
-  function fetchWiktionary(word, lang){
-    var url = "https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word);
-    return fetch(url).then(function(res){
-      if(res.status === 404){ return {status:"not-found"}; }
-      if(!res.ok){ return {status:"error", error:new Error("wiktionary-http-" + res.status)}; }
-      return res.json().then(function(data){
-        var entries = data[apiCodeForLang(lang)];
-        if(!entries || !entries.length){ return {status:"not-found"}; }
-        var meanings = entries.slice(0,6).map(function(m){
-          return {
-            partOfSpeech: m.partOfSpeech || "",
-            definitions: (m.definitions || []).slice(0,4).map(function(d){
-              var example = "";
-              if(d.parsedExamples && d.parsedExamples.length){ example = stripHtml(d.parsedExamples[0].example); }
-              else if(d.examples && d.examples.length){ example = stripHtml(d.examples[0]); }
-              return { definition: stripHtml(d.definition), example: example };
-            }),
-            synonyms: []
-          };
+  // Datamuse: word relationships. Free and keyless today; Datamuse has announced
+  // that an API key will be required from 1 Jan 2027. It is deliberately used
+  // only for extras, never for the definition itself, so when that day comes the
+  // app keeps working and just loses the related-words strip.
+  function fetchRelated(word){
+    var base = "https://api.datamuse.com/words?max=8&";
+    function q(param){
+      return fetch(base + param + "=" + encodeURIComponent(word))
+        .then(function(r){ return r.ok ? r.json() : []; })
+        .then(function(list){ return list.map(function(x){ return x.word; }); })
+        .catch(function(){ return []; });
+    }
+    return Promise.all([q("rel_syn"), q("rel_ant"), q("rel_trg")]).then(function(r){
+      return { synonyms: r[0], antonyms: r[1], related: r[2] };
+    }).catch(function(){ return { synonyms:[], antonyms:[], related:[] }; });
+  }
+
+  // Spelling suggestions when nothing matches.
+  function fetchSuggestions(word){
+    return fetch("https://api.datamuse.com/sug?max=6&s=" + encodeURIComponent(word))
+      .then(function(r){ return r.ok ? r.json() : []; })
+      .then(function(list){
+        return list.map(function(x){ return x.word; })
+                   .filter(function(w){ return w.toLowerCase() !== word.toLowerCase(); });
+      })
+      .catch(function(){ return []; });
+  }
+
+  // Merge: Wiktionary's definitions win; dictionaryapi.dev contributes IPA/audio
+  // and fills in any part of speech Wiktionary didn't cover.
+  function mergeEntries(wikt, dict, word){
+    var base = null;
+    if(wikt && wikt.status === "found"){
+      base = wikt.entry;
+      base.source = "Wiktionary";
+    }
+    if(dict && dict.status === "found"){
+      if(!base){
+        base = dict.entry;
+        base.source = "dictionaryapi.dev";
+      } else {
+        base.phonetic = base.phonetic || dict.entry.phonetic;
+        base.audio = base.audio || dict.entry.audio;
+        var have = {};
+        base.meanings.forEach(function(m){ have[(m.partOfSpeech||"").toLowerCase()] = true; });
+        dict.entry.meanings.forEach(function(m){
+          if(!have[(m.partOfSpeech||"").toLowerCase()]){ base.meanings.push(m); }
         });
-        return { status:"found", entry: { word: word, phonetic: "", audio: "", meanings: meanings } };
-      });
-    }).catch(function(err){ return {status:"error", error: err}; });
+        base.source = "Wiktionary + dictionaryapi.dev";
+      }
+    }
+    if(base && !base.word){ base.word = word; }
+    return base;
   }
 
   function lookup(word, lang){
     word = (word || "").trim();
     if(!word){ return; }
     lang = lang || langSelect.value;
-    resultSlot.innerHTML = '<p class="status">Looking up “' + escapeHtml(word) + '”…</p>';
+    resultSlot.innerHTML = '<p class="status">Looking up \u201c' + escapeHtml(word) + '\u201d\u2026</p>';
 
-    // Offline shard first (instant, no data), then online sources.
-    fetchLocal(word, lang).then(function(localResult){
-      if(localResult.status === "found"){ return localResult; }
-      return fetchPrimary(word, lang).then(function(primaryResult){
-        if(primaryResult.status === "found"){
-          primaryResult.entry.source = "dictionaryapi.dev";
-          return primaryResult;
+    // If the phone is offline, don't waste time on network calls.
+    if(navigator.onLine === false){
+      fetchLocal(word, lang).then(function(local){
+        if(local.status === "found"){ renderEntry(local.entry, lang); }
+        else {
+          resultSlot.innerHTML = '<p class="status error">You\u2019re offline and \u201c' + escapeHtml(word) + '\u201d isn\u2019t in the downloaded dictionary.</p>';
+          currentEntryData = null;
         }
-        return fetchWiktionary(word, lang).then(function(fallbackResult){
-          if(fallbackResult.status === "found"){
-            fallbackResult.entry.source = "Wiktionary";
-            return fallbackResult;
+      });
+      return;
+    }
+
+    Promise.all([
+      fetchWiktionary(word, lang),
+      fetchDictApi(word, lang),
+      fetchRelated(word)
+    ]).then(function(res){
+      var merged = mergeEntries(res[0], res[1], word);
+      var related = res[2];
+
+      if(merged){
+        merged.related = related;
+        renderEntry(merged, lang);
+        return;
+      }
+
+      // Nothing online. Try the offline copy, then offer spelling suggestions.
+      return fetchLocal(word, lang).then(function(local){
+        if(local.status === "found"){
+          local.entry.related = related;
+          renderEntry(local.entry, lang);
+          return;
+        }
+        var networkDown = res[0].status === "error" && res[1].status === "error";
+        return fetchSuggestions(word).then(function(suggestions){
+          if(networkDown && !suggestions.length){
+            resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach any dictionary. Check your connection and try again.</p>';
+          } else if(suggestions.length){
+            var html = '<p class="status error">No entry for \u201c' + escapeHtml(word) + '\u201d. Did you mean:</p><div class="suggestions">';
+            suggestions.forEach(function(s){
+              html += '<button class="suggestion" data-word="' + escapeHtml(s) + '">' + escapeHtml(s) + '</button>';
+            });
+            html += '</div>';
+            resultSlot.innerHTML = html;
+            Array.prototype.forEach.call(resultSlot.querySelectorAll(".suggestion"), function(b){
+              b.addEventListener("click", function(){
+                searchInput.value = b.getAttribute("data-word");
+                lookup(b.getAttribute("data-word"), lang);
+              });
+            });
+          } else {
+            resultSlot.innerHTML = '<p class="status error">No entry found for \u201c' + escapeHtml(word) + '\u201d.</p>';
           }
-          if(primaryResult.status === "error" && fallbackResult.status === "error"){
-            return { status:"error" };
-          }
-          return { status:"not-found" };
+          currentEntryData = null;
         });
       });
-    }).then(function(result){
-      if(result.status === "found"){
-        renderEntry(result.entry, lang);
-      } else if(result.status === "not-found"){
-        resultSlot.innerHTML = '<p class="status error">No definition found for “' + escapeHtml(word) + '”. Check the spelling, or try switching the language above.</p>';
-        currentEntryData = null;
-      } else if(window.location.protocol === "file:"){
-        resultSlot.innerHTML = '<p class="status error">Kosh is opened as a local file, so the browser blocks the dictionary request. Open it from your deployed link instead (Netlify or GitHub Pages URL, not the file itself).</p>';
-        currentEntryData = null;
-      } else {
-        resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach the dictionary, and this word isn\u2019t in the offline copy. Check your connection and try again.</p>';
-        currentEntryData = null;
-      }
     });
   }
 
@@ -785,6 +895,19 @@
     });
 
     var already = words.some(function(w){ return w.id === wordId(entry.word, lang); });
+
+    var rel = entry.related || {};
+    function relGroup(label, list){
+      if(!list || !list.length){ return ""; }
+      var out = '<div class="rel-group"><span class="rel-label">' + label + '</span><div class="rel-words">';
+      list.forEach(function(w){
+        out += '<button class="rel-word" data-word="' + escapeHtml(w) + '">' + escapeHtml(w) + '</button>';
+      });
+      return out + '</div></div>';
+    }
+    var relHtml = relGroup("Similar", rel.synonyms) + relGroup("Opposite", rel.antonyms) + relGroup("Associated", rel.related);
+    if(relHtml){ html += '<div class="rel-block">' + relHtml + '</div>'; }
+
     if(entry.source){
       html += '<div class="source-tag">Source: ' + escapeHtml(entry.source === "offline" ? "offline dictionary on this phone" : entry.source) + '</div>';
     }
@@ -799,6 +922,13 @@
         audioPlayer.play();
       });
     }
+    Array.prototype.forEach.call(resultSlot.querySelectorAll(".rel-word"), function(b){
+      b.addEventListener("click", function(){
+        var w = b.getAttribute("data-word");
+        searchInput.value = w;
+        lookup(w, lang);
+      });
+    });
     document.getElementById("save-btn").addEventListener("click", toggleSaveCurrent);
   }
 
