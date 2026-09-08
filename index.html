@@ -380,6 +380,10 @@
   }
   .entry-compact{border-top:none;}
   .online-block .entry{border-top:none; padding-top:4px;}
+  .word-row-body .entry,
+  .review-back .entry{border-top:none; padding-top:0;}
+  .word-row-body .entry-head{margin-bottom:2px;}
+  .word-row-body .rel-block{margin-top:14px;}
 
   .entry{border-top:1px solid var(--line); padding-top:18px;}
   .entry-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
@@ -1403,7 +1407,9 @@
     if(entry.syllables){ pronBits += '<span class="syllables">' + entry.syllables + (entry.syllables === 1 ? " syllable" : " syllables") + '</span>'; }
     // The button is always offered: with a recording when one exists, otherwise
     // the phone's own British voice, which also works with no signal.
-    pronBits += '<button class="audio-btn" data-role="speak" title="Hear it in British English">\u25B6</button>';
+    if(!opts.noSpeak){
+      pronBits += '<button class="audio-btn" data-role="speak" title="Hear it in British English">\u25B6</button>';
+    }
     if(entry.audio && entry.audioAccent){
       pronBits += '<span class="accent-tag">' + escapeHtml(entry.audioAccent) + '</span>';
     }
@@ -1537,7 +1543,10 @@
       existing.meanings = entry.meanings || existing.meanings;
       existing.phonetic = entry.phonetic || existing.phonetic || "";
       existing.audio = entry.audio || existing.audio || "";
+      existing.audioAccent = entry.audioAccent || existing.audioAccent || "";
       existing.syllables = entry.syllables || existing.syllables || null;
+      existing.related = entry.related || existing.related || null;
+      existing.source = entry.source || existing.source || "";
       saveWords(words);
     }
     currentEntryData = {
@@ -1558,7 +1567,12 @@
       lang: lang,
       phonetic: entry.phonetic || "",
       audio: entry.audio || "",
+      audioAccent: entry.audioAccent || "",
+      syllables: entry.syllables || null,
       meanings: entry.meanings || [],
+      related: entry.related || null,
+      source: entry.source || "",
+      translations: entry.translations || null,
       savedAt: Date.now(),
       box: 1,
       nextReview: Date.now(),
@@ -1663,7 +1677,7 @@
       html += '<button class="word-row-del" data-id="' + w.id + '">Remove</button>';
       html += '</div>';
       html += '</div>';
-      html += '<div class="word-row-body">' + renderMeaningsHtml(w.meanings, w.translations) + '</div>';
+      html += '<div class="word-row-body">' + renderSavedBody(w) + '</div>';
       html += '</li>';
     });
     if(currentHeading !== null){ html += '</ul>'; }
@@ -1672,10 +1686,20 @@
     Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-head"), function(el){
       el.addEventListener("click", function(e){
         if(e.target.classList.contains("word-row-del")){ return; }
+        if(e.target.classList.contains("rel-word")){ return; }
         if(e.target.hasAttribute && e.target.hasAttribute("data-speak")){ return; }
         var row = el.closest(".word-row");
         var body = row.querySelector(".word-row-body");
         body.classList.toggle("open");
+      });
+    });
+    Array.prototype.forEach.call(savedListSlot.querySelectorAll(".rel-word"), function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        var w = el.getAttribute("data-word");
+        searchInput.value = w;
+        showTab("lookup");
+        lookup(w, "en");
       });
     });
     Array.prototype.forEach.call(savedListSlot.querySelectorAll("[data-speak]"), function(el){
@@ -1693,6 +1717,30 @@
         renderSavedList();
       });
     });
+  }
+
+  // Saved words render through the SAME builder as a fresh lookup, so the
+  // detail level is identical — IPA, syllables, every sense, examples,
+  // related words, source — rather than a stripped-down summary.
+  function renderSavedBody(w){
+    var html = buildEntryHtml({
+      word: w.word,
+      phonetic: w.phonetic,
+      audio: w.audio,
+      audioAccent: w.audioAccent,
+      syllables: w.syllables,
+      meanings: w.meanings,
+      related: w.related,
+      source: w.source
+    }, { hideHead: true, noSpeak: true, showSave: false });
+
+    if(w.translations && (w.translations.hi || w.translations.pa)){
+      html += '<div class="trans-inline">';
+      if(w.translations.hi){ html += '<span><b>हिन्दी</b> ' + escapeHtml(w.translations.hi) + '</span>'; }
+      if(w.translations.pa){ html += '<span><b>ਪੰਜਾਬੀ</b> ' + escapeHtml(w.translations.pa) + '</span>'; }
+      html += '</div>';
+    }
+    return html;
   }
 
   function renderMeaningsHtml(meanings, translations){
@@ -1767,7 +1815,7 @@
     html += '<div class="review-word">' + escapeHtml(w.word) + '</div>';
     html += '<button class="audio-btn review-speak" id="review-speak" title="Hear it">▶</button>';
     html += '<div class="review-hint" id="review-hint">Tap the card to reveal the definition</div>';
-    html += '<div class="review-back" id="review-back">' + renderMeaningsHtml(w.meanings, w.translations) + '</div>';
+    html += '<div class="review-back" id="review-back">' + renderSavedBody(w) + '</div>';
     html += '</div>';
     html += '<div class="review-buttons" id="review-buttons" style="visibility:hidden;">';
     html += '<button class="btn-again" id="btn-again">Still learning</button>';
