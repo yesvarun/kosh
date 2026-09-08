@@ -366,9 +366,10 @@
 
   <main>
     <section id="view-lookup" class="view active">
+      <div id="protocol-warning-slot"></div>
       <div id="shared-note-slot"></div>
       <div class="search-row">
-        <input type="text" id="search-input" placeholder="Type a word…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <input type="text" id="search-input" placeholder="Type a word…" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search" enterkeyhint="search">
         <button class="primary" id="search-btn">Look up</button>
       </div>
       <div class="lang-row">
@@ -467,15 +468,32 @@
     lang = lang || langSelect.value;
     resultSlot.innerHTML = '<p class="status">Looking up “' + escapeHtml(word) + '”…</p>';
     var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
+
     fetch(url).then(function(res){
-      if(!res.ok){ throw new Error("not-found"); }
+      if(res.status === 404){
+        resultSlot.innerHTML = '<p class="status error">No definition found for “' + escapeHtml(word) + '”. Check the spelling, or try switching the language above.</p>';
+        currentEntryData = null;
+        return null;
+      }
+      if(!res.ok){ throw new Error("http-" + res.status); }
       return res.json();
     }).then(function(data){
-      renderEntry(data[0], lang);
-    }).catch(function(){
-      resultSlot.innerHTML = '<p class="status error">No definition found for “' + escapeHtml(word) + '”. Check the spelling, or try switching the language above.</p>';
+      if(data){ renderEntry(data[0], lang); }
+    }).catch(function(err){
+      if(window.location.protocol === "file:"){
+        resultSlot.innerHTML = '<p class="status error">Kosh is opened as a local file, so the browser blocks the dictionary request. Open it from your deployed link instead (Netlify or GitHub Pages URL, not the file itself) — see the "Local file" note in README.md.</p>';
+      } else {
+        resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach the dictionary (' + escapeHtml(err && err.message ? err.message : "network error") + '). Check your connection and try again.</p>';
+      }
       currentEntryData = null;
     });
+  }
+
+  function checkProtocolWarning(){
+    if(window.location.protocol === "file:"){
+      document.getElementById("protocol-warning-slot").innerHTML =
+        '<div class="shared-note" style="border:1px solid var(--danger); color:var(--danger);">Opened as a local file — dictionary lookups and the share sheet won\u2019t work here. Open Kosh from its deployed https:// link instead.</div>';
+    }
   }
 
   function escapeHtml(s){
@@ -768,6 +786,7 @@
   }
 
   updateDueBadge();
+  checkProtocolWarning();
   handleShareParams();
 })();
 </script>
