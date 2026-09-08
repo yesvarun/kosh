@@ -140,6 +140,37 @@
     padding:20px 0;
   }
   .status.error{color:var(--danger);}
+  .offline-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:10px;
+    margin:-10px 0 20px 0;
+    padding:9px 11px;
+    background:var(--accent-soft);
+    border-radius:7px;
+    font-size:12.5px;
+    color:var(--ink-soft);
+  }
+  .offline-row button{
+    border:1px solid var(--accent);
+    background:transparent;
+    color:var(--accent);
+    font-family:var(--sans);
+    font-size:12.5px;
+    font-weight:600;
+    padding:5px 11px;
+    border-radius:6px;
+    cursor:pointer;
+    flex-shrink:0;
+  }
+  .source-tag{
+    font-size:11.5px;
+    color:var(--ink-soft);
+    margin-top:14px;
+    padding-top:8px;
+    border-top:1px dotted var(--line);
+  }
 
   .entry{border-top:1px solid var(--line); padding-top:18px;}
   .entry-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
@@ -379,6 +410,10 @@
           <option value="hi">Hindi</option>
         </select>
       </div>
+      <div class="offline-row">
+        <span id="offline-status">Offline dictionary: checking…</span>
+        <button id="offline-btn" style="display:none;">Download</button>
+      </div>
       <div id="result-slot"></div>
     </section>
 
@@ -462,30 +497,250 @@
     return lang === "hi" ? "hi" : "en";
   }
 
+  // ================= offline dictionary =================
+  // The bundled dictionary lives in ./dict/ as one JSON file per starting letter
+  // (a.json … z.json) plus index.json listing them. Shards are fetched on demand
+  // and kept in the Cache Storage API, so lookups work with no network at all.
+  var DICT_CACHE = "kosh-dict-v1";
+  var shardMemory = {};   // letter -> parsed object, so repeat lookups are instant
+  var dictIndex = null;   // {shards:[...], words:N, source:"..."} once loaded
+
+  function shardFor(word){
+    var c = word.trim().charAt(0).toLowerCase();
+    return (c >= "a" && c <= "z") ? c : "_";
+  }
+
+  // Cache first, network second. Returns null if the shard is neither cached nor
+  // reachable — that's a normal state before the offline download has been run.
+  function getShard(letter){
+    if(shardMemory[letter] !== undefined){ return Promise.resolve(shardMemory[letter]); }
+    var path = "./dict/" + letter + ".json";
+    var fromCache = ("caches" in window)
+      ? caches.open(DICT_CACHE).then(function(c){ return c.match(path); })
+      : Promise.resolve(null);
+
+    return fromCache.then(function(res){
+      if(res){ return res; }
+      return fetch(path).then(function(r){
+        if(!r.ok){ return null; }
+        if("caches" in window){
+          var copy = r.clone();
+          caches.open(DICT_CACHE).then(function(c){ c.put(path, copy); });
+        }
+        return r;
+      });
+    }).then(function(res){
+      if(!res){ shardMemory[letter] = null; return null; }
+      return res.json().then(function(json){
+        shardMemory[letter] = json;
+        return json;
+      });
+    }).catch(function(){
+      shardMemory[letter] = null;
+      return null;
+    });
+  }
+
+  function fetchLocal(word, lang){
+    if(apiCodeForLang(lang) !== "en"){ return Promise.resolve({status:"not-found"}); }
+    return getShard(shardFor(word)).then(function(shard){
+      if(!shard){ return {status:"not-found"}; }
+      var meanings = shard[word.trim().toLowerCase()];
+      if(!meanings || !meanings.length){ return {status:"not-found"}; }
+      return { status:"found", entry: {
+        word: word.trim().toLowerCase(),
+        phonetic: "",
+        audio: "",
+        meanings: meanings,
+        source: "offline"
+      }};
+    });
+  }
+
+  function loadDictIndex(){
+    var path = "./dict/index.json";
+    var fromCache = ("caches" in window)
+      ? caches.open(DICT_CACHE).then(function(c){ return c.match(path); })
+      : Promise.resolve(null);
+    return fromCache.then(function(res){
+      return res || fetch(path);
+    }).then(function(res){
+      if(!res || !res.ok){ return null; }
+      return res.json();
+    }).catch(function(){ return null; });
+  }
+
+  var offlineStatusEl = document.getElementById("offline-status");
+  var offlineBtn = document.getElementById("offline-btn");
+
+  function refreshOfflineStatus(){
+    loadDictIndex().then(function(index){
+      if(!index){
+        offlineStatusEl.textContent = "Offline dictionary: not installed. Run the build workflow to add ./dict/.";
+        offlineBtn.style.display = "none";
+        return;
+      }
+      dictIndex = index;
+      if(!("caches" in window)){
+        offlineStatusEl.textContent = "Offline dictionary available (" + index.words.toLocaleString() + " words). This browser can't store it.";
+        offlineBtn.style.display = "none";
+        return;
+      }
+      caches.open(DICT_CACHE).then(function(c){ return c.keys(); }).then(function(keys){
+        var have = keys.filter(function(k){ return k.url.indexOf("/dict/") !== -1 && k.url.indexOf("index.json") === -1; }).length;
+        if(have >= index.shards.length){
+          offlineStatusEl.textContent = index.words.toLocaleString() + " words stored on this phone — lookups work offline.";
+          offlineBtn.textContent = "Remove";
+          offlineBtn.style.display = "";
+          offlineBtn.onclick = removeOffline;
+        } else {
+          offlineStatusEl.textContent = index.words.toLocaleString() + " words available offline (~" + index.approx_mb + " MB, one-time).";
+          offlineBtn.textContent = have > 0 ? "Finish download" : "Download";
+          offlineBtn.style.display = "";
+          offlineBtn.onclick = downloadOffline;
+        }
+      });
+    });
+  }
+
+  function downloadOffline(){
+    if(!dictIndex){ return; }
+    offlineBtn.style.display = "none";
+    var shards = dictIndex.shards.concat(["index"]);
+    var done = 0;
+    offlineStatusEl.textContent = "Downloading dictionary… 0%";
+    caches.open(DICT_CACHE).then(function(cache){
+      // Sequential, not parallel — kinder to a phone connection and gives real progress.
+      return shards.reduce(function(chain, letter){
+        return chain.then(function(){
+          return cache.add("./dict/" + letter + ".json").catch(function(){}).then(function(){
+            done++;
+            offlineStatusEl.textContent = "Downloading dictionary… " + Math.round(done / shards.length * 100) + "%";
+          });
+        });
+      }, Promise.resolve());
+    }).then(function(){
+      shardMemory = {};
+      refreshOfflineStatus();
+    });
+  }
+
+  function removeOffline(){
+    caches.delete(DICT_CACHE).then(function(){
+      shardMemory = {};
+      refreshOfflineStatus();
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  // Wiktionary's fields (definitions/examples) contain inline HTML (links, etc).
+  // Parse it as an element and read textContent — this only extracts plain text,
+  // it never re-inserts the markup, so it's safe even though the source is untrusted.
+  function stripHtml(html){
+    var div = document.createElement("div");
+    div.innerHTML = html || "";
+    return (div.textContent || div.innerText || "").trim();
+  }
+
+  // --- Source 1: dictionaryapi.dev — has phonetics/audio, but its word list
+  // is a small hobby dataset and is missing plenty of ordinary words (e.g. "leave").
+  function fetchPrimary(word, lang){
+    var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
+    return fetch(url).then(function(res){
+      if(res.status === 404){ return {status:"not-found"}; }
+      if(!res.ok){ return {status:"error", error:new Error("primary-http-" + res.status)}; }
+      return res.json().then(function(data){
+        var e = data[0];
+        var phonetic = e.phonetic || "";
+        var audio = "";
+        (e.phonetics || []).forEach(function(p){
+          if(p.audio){ audio = p.audio; }
+          if(!phonetic && p.text){ phonetic = p.text; }
+        });
+        var meanings = (e.meanings || []).map(function(m){
+          return {
+            partOfSpeech: m.partOfSpeech,
+            definitions: (m.definitions || []).slice(0,4).map(function(d){
+              return { definition: d.definition, example: d.example || "" };
+            }),
+            synonyms: (m.synonyms || []).slice(0,6)
+          };
+        });
+        return { status:"found", entry: { word: e.word, phonetic: phonetic, audio: audio, meanings: meanings } };
+      });
+    }).catch(function(err){ return {status:"error", error: err}; });
+  }
+
+  // --- Source 2 (fallback): Wiktionary's public REST API — no phonetics/audio,
+  // but a far larger, actively maintained word list. Used only when source 1 misses.
+  function fetchWiktionary(word, lang){
+    var url = "https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word);
+    return fetch(url).then(function(res){
+      if(res.status === 404){ return {status:"not-found"}; }
+      if(!res.ok){ return {status:"error", error:new Error("wiktionary-http-" + res.status)}; }
+      return res.json().then(function(data){
+        var entries = data[apiCodeForLang(lang)];
+        if(!entries || !entries.length){ return {status:"not-found"}; }
+        var meanings = entries.slice(0,6).map(function(m){
+          return {
+            partOfSpeech: m.partOfSpeech || "",
+            definitions: (m.definitions || []).slice(0,4).map(function(d){
+              var example = "";
+              if(d.parsedExamples && d.parsedExamples.length){ example = stripHtml(d.parsedExamples[0].example); }
+              else if(d.examples && d.examples.length){ example = stripHtml(d.examples[0]); }
+              return { definition: stripHtml(d.definition), example: example };
+            }),
+            synonyms: []
+          };
+        });
+        return { status:"found", entry: { word: word, phonetic: "", audio: "", meanings: meanings } };
+      });
+    }).catch(function(err){ return {status:"error", error: err}; });
+  }
+
   function lookup(word, lang){
     word = (word || "").trim();
     if(!word){ return; }
     lang = lang || langSelect.value;
     resultSlot.innerHTML = '<p class="status">Looking up “' + escapeHtml(word) + '”…</p>';
-    var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
 
-    fetch(url).then(function(res){
-      if(res.status === 404){
+    // Offline shard first (instant, no data), then online sources.
+    fetchLocal(word, lang).then(function(localResult){
+      if(localResult.status === "found"){ return localResult; }
+      return fetchPrimary(word, lang).then(function(primaryResult){
+        if(primaryResult.status === "found"){
+          primaryResult.entry.source = "dictionaryapi.dev";
+          return primaryResult;
+        }
+        return fetchWiktionary(word, lang).then(function(fallbackResult){
+          if(fallbackResult.status === "found"){
+            fallbackResult.entry.source = "Wiktionary";
+            return fallbackResult;
+          }
+          if(primaryResult.status === "error" && fallbackResult.status === "error"){
+            return { status:"error" };
+          }
+          return { status:"not-found" };
+        });
+      });
+    }).then(function(result){
+      if(result.status === "found"){
+        renderEntry(result.entry, lang);
+      } else if(result.status === "not-found"){
         resultSlot.innerHTML = '<p class="status error">No definition found for “' + escapeHtml(word) + '”. Check the spelling, or try switching the language above.</p>';
         currentEntryData = null;
-        return null;
-      }
-      if(!res.ok){ throw new Error("http-" + res.status); }
-      return res.json();
-    }).then(function(data){
-      if(data){ renderEntry(data[0], lang); }
-    }).catch(function(err){
-      if(window.location.protocol === "file:"){
-        resultSlot.innerHTML = '<p class="status error">Kosh is opened as a local file, so the browser blocks the dictionary request. Open it from your deployed link instead (Netlify or GitHub Pages URL, not the file itself) — see the "Local file" note in README.md.</p>';
+      } else if(window.location.protocol === "file:"){
+        resultSlot.innerHTML = '<p class="status error">Kosh is opened as a local file, so the browser blocks the dictionary request. Open it from your deployed link instead (Netlify or GitHub Pages URL, not the file itself).</p>';
+        currentEntryData = null;
       } else {
-        resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach the dictionary (' + escapeHtml(err && err.message ? err.message : "network error") + '). Check your connection and try again.</p>';
+        resultSlot.innerHTML = '<p class="status error">Couldn\u2019t reach the dictionary, and this word isn\u2019t in the offline copy. Check your connection and try again.</p>';
+        currentEntryData = null;
       }
-      currentEntryData = null;
     });
   }
 
@@ -496,30 +751,10 @@
     }
   }
 
-  function escapeHtml(s){
-    return String(s).replace(/[&<>"']/g, function(c){
-      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-    });
-  }
-
   function renderEntry(entry, lang){
     var phonetic = entry.phonetic || "";
-    var audio = "";
-    if(entry.phonetics){
-      for(var i=0;i<entry.phonetics.length;i++){
-        if(entry.phonetics[i].audio){ audio = entry.phonetics[i].audio; }
-        if(!phonetic && entry.phonetics[i].text){ phonetic = entry.phonetics[i].text; }
-      }
-    }
-    var meanings = (entry.meanings || []).map(function(m){
-      return {
-        partOfSpeech: m.partOfSpeech,
-        definitions: (m.definitions || []).slice(0,4).map(function(d){
-          return { definition: d.definition, example: d.example || "" };
-        }),
-        synonyms: (m.synonyms || []).slice(0,6)
-      };
-    });
+    var audio = entry.audio || "";
+    var meanings = entry.meanings || [];
 
     currentEntryData = {
       word: entry.word,
@@ -550,6 +785,9 @@
     });
 
     var already = words.some(function(w){ return w.id === wordId(entry.word, lang); });
+    if(entry.source){
+      html += '<div class="source-tag">Source: ' + escapeHtml(entry.source === "offline" ? "offline dictionary on this phone" : entry.source) + '</div>';
+    }
     html += '<button class="save-btn' + (already ? ' saved' : '') + '" id="save-btn">' + (already ? "Saved ✓ — tap to remove" : "Save for later") + '</button>';
     html += '</div>';
 
@@ -585,7 +823,6 @@
       });
     }
     saveWords(words);
-    renderEntry.lastLang = currentEntryData.lang;
     var savedNow = idx < 0;
     var btn = document.getElementById("save-btn");
     btn.textContent = savedNow ? "Saved ✓ — tap to remove" : "Save for later";
@@ -787,6 +1024,7 @@
 
   updateDueBadge();
   checkProtocolWarning();
+  refreshOfflineStatus();
   handleShareParams();
 })();
 </script>

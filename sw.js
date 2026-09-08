@@ -20,7 +20,7 @@ self.addEventListener("activate", function(event){
   event.waitUntil(
     caches.keys().then(function(keys){
       return Promise.all(
-        keys.filter(function(key){ return key !== CACHE_NAME; })
+        keys.filter(function(key){ return key !== CACHE_NAME && key.indexOf("kosh-dict") !== 0; })
             .map(function(key){ return caches.delete(key); })
       );
     })
@@ -33,8 +33,11 @@ self.addEventListener("activate", function(event){
 // handler ignores them) so lookups stay fresh.
 self.addEventListener("fetch", function(event){
   var url = event.request.url;
-  if(url.indexOf("api.dictionaryapi.dev") !== -1){
-    return; // let the browser handle it directly
+  if(url.indexOf("api.dictionaryapi.dev") !== -1 || url.indexOf("wiktionary.org") !== -1){
+    return; // online lookups: always straight to the network, never cached
+  }
+  if(url.indexOf("/dict/") !== -1){
+    return; // offline dictionary shards: managed by the app in the kosh-dict cache
   }
   if(event.request.method !== "GET"){ return; }
 
