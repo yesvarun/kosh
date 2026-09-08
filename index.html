@@ -94,11 +94,14 @@
     display:flex;
     gap:8px;
     margin-bottom:10px;
+    width:100%;
   }
   input[type="text"]{
-    flex:1;
+    flex:1 1 auto;
+    min-width:0;              /* without this a flex item won't shrink below its
+                                 content width and pushes the button off-screen */
     font-family:var(--sans);
-    font-size:16px;
+    font-size:16px;           /* 16px stops iOS/Android zooming on focus */
     padding:12px 14px;
     border:1px solid var(--line);
     border-radius:8px;
@@ -107,13 +110,15 @@
   }
   input[type="text"]:focus{outline:2px solid var(--accent); outline-offset:1px;}
   button.primary{
+    flex:0 0 auto;
+    white-space:nowrap;
     font-family:var(--sans);
     font-size:15px;
     font-weight:600;
     background:var(--accent);
     color:var(--surface);
     border:none;
-    padding:0 18px;
+    padding:12px 16px;
     border-radius:8px;
     cursor:pointer;
   }
@@ -301,7 +306,14 @@
   }
   .filter-row{margin-bottom:14px;}
   .filter-row input{width:100%;}
-  ul.word-list{list-style:none; margin:0; padding:0;}
+  ul.word-list{list-style:none; margin:0 0 22px 0; padding:0;}
+  .date-heading{
+    font-family:var(--serif);
+    font-style:italic;
+    font-size:14px;
+    color:var(--accent);
+    margin-bottom:2px;
+  }
   li.word-row{
     border-top:1px solid var(--line);
     padding:12px 0;
@@ -600,6 +612,7 @@
 
   var offlineStatusEl = document.getElementById("offline-status");
   var offlineBtn = document.getElementById("offline-btn");
+  var OFFLINE_FLAG = "kosh_offline_ready";
 
   function refreshOfflineStatus(){
     loadDictIndex().then(function(index){
@@ -614,47 +627,57 @@
         offlineBtn.style.display = "none";
         return;
       }
-      caches.open(DICT_CACHE).then(function(c){ return c.keys(); }).then(function(keys){
-        var have = keys.filter(function(k){ return k.url.indexOf("/dict/") !== -1 && k.url.indexOf("index.json") === -1; }).length;
-        if(have >= index.shards.length){
-          offlineStatusEl.textContent = index.words.toLocaleString() + " words stored on this phone — lookups work offline.";
-          offlineBtn.textContent = "Remove";
-          offlineBtn.style.display = "";
-          offlineBtn.onclick = removeOffline;
-        } else {
-          offlineStatusEl.textContent = index.words.toLocaleString() + " words available offline (~" + index.approx_mb + " MB, one-time).";
-          offlineBtn.textContent = have > 0 ? "Finish download" : "Download";
-          offlineBtn.style.display = "";
-          offlineBtn.onclick = downloadOffline;
-        }
-      });
+      // A completed download sets a flag. Counting cached files was unreliable:
+      // if any single shard 404'd the count never matched and the button was
+      // stuck on "Finish download" forever.
+      if(localStorage.getItem(OFFLINE_FLAG) === index.source + "|" + index.words){
+        offlineStatusEl.textContent = index.words.toLocaleString() + " words stored on this phone — lookups work offline.";
+        offlineBtn.textContent = "Remove";
+        offlineBtn.style.display = "";
+        offlineBtn.onclick = removeOffline;
+      } else {
+        offlineStatusEl.textContent = index.words.toLocaleString() + " words available offline (~" + index.approx_mb + " MB, one-time).";
+        offlineBtn.textContent = "Download";
+        offlineBtn.style.display = "";
+        offlineBtn.onclick = downloadOffline;
+      }
     });
   }
 
   function downloadOffline(){
     if(!dictIndex){ return; }
     offlineBtn.style.display = "none";
-    var shards = dictIndex.shards.concat(["index"]);
-    var done = 0;
+    var files = dictIndex.shards.concat(["index"]);
+    var done = 0, failed = 0;
     offlineStatusEl.textContent = "Downloading dictionary… 0%";
     caches.open(DICT_CACHE).then(function(cache){
-      // Sequential, not parallel — kinder to a phone connection and gives real progress.
-      return shards.reduce(function(chain, letter){
+      // Sequential, not parallel — kinder to a phone connection, real progress.
+      return files.reduce(function(chain, letter){
         return chain.then(function(){
-          return cache.add("./dict/" + letter + ".json").catch(function(){}).then(function(){
+          return cache.add("./dict/" + letter + ".json").catch(function(){ failed++; }).then(function(){
             done++;
-            offlineStatusEl.textContent = "Downloading dictionary… " + Math.round(done / shards.length * 100) + "%";
+            offlineStatusEl.textContent = "Downloading dictionary… " + Math.round(done / files.length * 100) + "%";
           });
         });
       }, Promise.resolve());
     }).then(function(){
       shardMemory = {};
+      if(failed === files.length){
+        offlineStatusEl.textContent = "Download failed. Check your connection and try again.";
+        offlineBtn.textContent = "Retry";
+        offlineBtn.style.display = "";
+        offlineBtn.onclick = downloadOffline;
+        return;
+      }
+      // Everything reachable was fetched — mark it done so the button settles.
+      localStorage.setItem(OFFLINE_FLAG, dictIndex.source + "|" + dictIndex.words);
       refreshOfflineStatus();
     });
   }
 
   function removeOffline(){
     caches.delete(DICT_CACHE).then(function(){
+      localStorage.removeItem(OFFLINE_FLAG);
       shardMemory = {};
       refreshOfflineStatus();
     });
@@ -894,7 +917,9 @@
       }
     });
 
-    var already = words.some(function(w){ return w.id === wordId(entry.word, lang); });
+    // Every word you look up is saved automatically — no tap needed.
+    saveEntry(currentEntryData, lang);
+    var already = true;
 
     var rel = entry.related || {};
     function relGroup(label, list){
@@ -911,7 +936,7 @@
     if(entry.source){
       html += '<div class="source-tag">Source: ' + escapeHtml(entry.source === "offline" ? "offline dictionary on this phone" : entry.source) + '</div>';
     }
-    html += '<button class="save-btn' + (already ? ' saved' : '') + '" id="save-btn">' + (already ? "Saved ✓ — tap to remove" : "Save for later") + '</button>';
+    html += '<button class="save-btn' + (already ? ' saved' : '') + '" id="save-btn">' + (already ? "Saved for review — tap to remove" : "Save for later") + '</button>';
     html += '</div>';
 
     resultSlot.innerHTML = html;
@@ -932,30 +957,39 @@
     document.getElementById("save-btn").addEventListener("click", toggleSaveCurrent);
   }
 
+  function saveEntry(entry, lang){
+    var id = wordId(entry.word, lang);
+    if(words.some(function(w){ return w.id === id; })){ return false; }
+    words.push({
+      id: id,
+      word: entry.word,
+      lang: lang,
+      phonetic: entry.phonetic || "",
+      audio: entry.audio || "",
+      meanings: entry.meanings || [],
+      savedAt: Date.now(),
+      box: 1,
+      nextReview: Date.now(),
+      lastReviewed: null
+    });
+    saveWords(words);
+    updateDueBadge();
+    return true;
+  }
+
   function toggleSaveCurrent(){
     if(!currentEntryData){ return; }
     var id = wordId(currentEntryData.word, currentEntryData.lang);
     var idx = words.findIndex(function(w){ return w.id === id; });
     if(idx >= 0){
       words.splice(idx, 1);
+      saveWords(words);
     } else {
-      words.push({
-        id: id,
-        word: currentEntryData.word,
-        lang: currentEntryData.lang,
-        phonetic: currentEntryData.phonetic,
-        audio: currentEntryData.audio,
-        meanings: currentEntryData.meanings,
-        savedAt: Date.now(),
-        box: 1,
-        nextReview: Date.now(),
-        lastReviewed: null
-      });
+      saveEntry(currentEntryData, currentEntryData.lang);
     }
-    saveWords(words);
     var savedNow = idx < 0;
     var btn = document.getElementById("save-btn");
-    btn.textContent = savedNow ? "Saved ✓ — tap to remove" : "Save for later";
+    btn.textContent = savedNow ? "Saved for review — tap to remove" : "Save for later";
     btn.classList.toggle("saved", savedNow);
     updateDueBadge();
   }
@@ -985,6 +1019,22 @@
       (n > 0 ? " · <b>" + n + " due</b>" : "");
   }
 
+  function dateHeading(ts){
+    var d = new Date(ts);
+    var today = new Date();
+    var startOfDay = function(x){ return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+    var diffDays = Math.round((startOfDay(today) - startOfDay(d)) / 86400000);
+    if(diffDays === 0){ return "Today"; }
+    if(diffDays === 1){ return "Yesterday"; }
+    if(diffDays < 7){
+      return d.toLocaleDateString(undefined, { weekday:"long" });
+    }
+    if(d.getFullYear() === today.getFullYear()){
+      return d.toLocaleDateString(undefined, { day:"numeric", month:"long" });
+    }
+    return d.toLocaleDateString(undefined, { day:"numeric", month:"long", year:"numeric" });
+  }
+
   function renderSavedList(){
     updateDueBadge();
     var filter = filterInput.value.trim().toLowerCase();
@@ -994,13 +1044,21 @@
     }
     if(list.length === 0){
       savedListSlot.innerHTML = words.length === 0
-        ? '<div class="empty-state"><p>Nothing saved yet. Look up a word, or select text anywhere on your phone and share it to Kosh.</p></div>'
+        ? '<div class="empty-state"><p>Nothing saved yet. Look up a word — it\u2019s kept here automatically. You can also select text anywhere on your phone and share it to Kosh.</p></div>'
         : '<div class="empty-state"><p>No saved words match that filter.</p></div>';
       return;
     }
     var now = Date.now();
-    var html = '<ul class="word-list">';
+    var html = "";
+    var currentHeading = null;
+
     list.forEach(function(w){
+      var heading = dateHeading(w.savedAt);
+      if(heading !== currentHeading){
+        if(currentHeading !== null){ html += '</ul>'; }
+        currentHeading = heading;
+        html += '<div class="date-heading">' + escapeHtml(heading) + '</div><ul class="word-list">';
+      }
       var isDue = w.nextReview <= now;
       var firstPos = w.meanings && w.meanings[0] ? w.meanings[0].partOfSpeech : "";
       html += '<li class="word-row" data-id="' + w.id + '">';
@@ -1010,10 +1068,10 @@
       html += '<div class="word-row-pos">' + escapeHtml(firstPos || "") + '</div></div></div>';
       html += '<button class="word-row-del" data-id="' + w.id + '">Remove</button>';
       html += '</div>';
-      html += '<div class="word-row-body" id="body-' + w.id.replace(/[^a-zA-Z0-9]/g,'_') + '">' + renderMeaningsHtml(w.meanings) + '</div>';
+      html += '<div class="word-row-body">' + renderMeaningsHtml(w.meanings) + '</div>';
       html += '</li>';
     });
-    html += '</ul>';
+    if(currentHeading !== null){ html += '</ul>'; }
     savedListSlot.innerHTML = html;
 
     Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-head"), function(el){
