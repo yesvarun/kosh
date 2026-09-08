@@ -495,7 +495,67 @@
   }
   .saved-count{font-size:14px; color:var(--ink-soft);}
   .saved-count b{color:var(--ink);}
+  .saved-actions{display:flex; gap:7px; align-items:center;}
+  .export-btn{
+    background:transparent;
+    border:1px solid var(--accent);
+    color:var(--accent);
+    font-family:var(--sans);
+    font-weight:600;
+    font-size:13px;
+    padding:9px 12px;
+    border-radius:8px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+
+  /* ---- print / Save as PDF ---- */
+  #print-area{display:none;}
+  @media print{
+    body{background:#fff !important; background-image:none !important;}
+    #app, #review-overlay, audio{display:none !important;}
+    #print-area{display:block; color:#000;}
+    .p-doc{font-family:Georgia, 'Times New Roman', serif; font-size:11pt; line-height:1.45;}
+    .p-prompt{
+      border:1.5pt solid #000;
+      padding:10pt 12pt;
+      margin-bottom:16pt;
+      font-family:-apple-system, 'Segoe UI', Roboto, sans-serif;
+      font-size:8.6pt;
+      line-height:1.4;
+      page-break-after:always;
+    }
+    .p-title{font-size:19pt; margin:0 0 3pt 0;}
+    .p-meta{font-size:9pt; color:#444; margin-bottom:14pt; border-bottom:0.7pt solid #999; padding-bottom:7pt;}
+    .p-word{
+      margin-bottom:11pt;
+      padding-bottom:8pt;
+      border-bottom:0.4pt solid #ccc;
+      page-break-inside:avoid;   /* never split a word across two pages */
+    }
+    .p-head{font-size:13pt;}
+    .p-num{color:#666; font-size:10pt;}
+    .p-term{font-weight:bold;}
+    .p-phon{font-size:10pt; color:#555; font-weight:normal;}
+    .p-pos{font-style:italic; font-size:10pt; color:#333; margin-top:4pt;}
+    .p-defs{margin:2pt 0 0 0; padding-left:16pt;}
+    .p-defs li{margin-bottom:2pt;}
+    .p-ex{color:#555; font-style:italic;}
+    .p-rel{font-size:9.5pt; color:#333; margin-top:3pt;}
+    .p-trans{font-size:11pt; margin-top:4pt;}
+    @page{margin:13mm;}
+  }
   .review-btn{
+    background:var(--gold);
+    color:#1C231F;
+    border:none;
+    font-weight:700;
+    font-size:13px;
+    padding:10px 14px;
+    border-radius:8px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
     background:var(--gold);
     color:var(--ink);
     border:none;
@@ -677,7 +737,10 @@
     <section id="view-saved" class="view">
       <div class="saved-summary">
         <div class="saved-count" id="saved-count">0 words saved</div>
-        <button class="review-btn" id="start-review-btn" disabled>Start review</button>
+        <div class="saved-actions">
+          <button class="export-btn" id="export-pdf-btn">Export PDF</button>
+          <button class="review-btn" id="start-review-btn" disabled>Start review</button>
+        </div>
       </div>
       <div class="filter-row">
         <input type="text" id="filter-input" placeholder="Filter saved words…" autocomplete="off">
@@ -694,6 +757,8 @@
   </div>
   <div id="review-body-slot" style="flex:1; display:flex; flex-direction:column;"></div>
 </div>
+
+<div id="print-area"></div>
 
 <audio id="audio-player"></audio>
 
@@ -1782,6 +1847,99 @@
   }
 
   filterInput.addEventListener("input", renderSavedList);
+
+  // ---------- PDF export ----------
+  // No PDF library: a print stylesheet plus the phone's own "Save as PDF" in the
+  // Android print dialog. That keeps Devanagari and Gurmukhi rendering correctly,
+  // which an embedded-font PDF library would mangle without shipping large fonts.
+
+  function quizPrompt(count){
+    return [
+      "INSTRUCTIONS FOR GEMINI — read this whole page first, then begin.",
+      "",
+      "You are my vocabulary examiner. The pages below contain " + count + " words with their meanings. Use ONLY these words.",
+      "",
+      "Run a quiz of exactly 20 multiple-choice questions.",
+      "",
+      "RULES:",
+      "1. Ask ONE question at a time. Never show the next question until I have answered the current one.",
+      "2. Each question has four options labelled A, B, C, D, with exactly one correct answer.",
+      "3. Vary the question types across the quiz. Mix these freely:",
+      "   - the word used in a sentence, and I pick what it means in that context",
+      "   - a definition, and I pick the word that fits",
+      "   - a sentence with a blank, and I pick the word that completes it",
+      "   - which sentence uses the word correctly",
+      "   - closest in meaning / opposite in meaning",
+      "4. Cover as many different words as possible across the 20 questions. A word MAY be reused, but only if the later question tests it in a clearly different way.",
+      "5. The moment I answer, immediately tell me: correct or wrong, the right answer, a one-line explanation, and my running score in the form 'Score: X/Y'. Then go straight to the next question in the same message. Do not wait for me to ask.",
+      "6. After question 20, give: my final score out of 20, a percentage, a list of every question I got wrong with the word, the correct answer and why, and the words I should revise.",
+      "",
+      "Start now with question 1. Do not summarise the word list first, and do not ask me any setup questions."
+    ].join("\n");
+  }
+
+  function buildPrintHtml(list){
+    var now = new Date();
+    var html = '<div class="p-doc">';
+    html += '<div class="p-prompt">' + escapeHtml(quizPrompt(list.length)).replace(/\n/g, "<br>") + '</div>';
+    html += '<h1 class="p-title">Vocabulary list</h1>';
+    html += '<div class="p-meta">' + list.length + ' words \u00b7 exported from Kosh \u00b7 ' +
+            now.toLocaleDateString(undefined, {day:"numeric", month:"long", year:"numeric"}) + '</div>';
+
+    list.forEach(function(w, i){
+      html += '<div class="p-word">';
+      html += '<div class="p-head"><span class="p-num">' + (i+1) + '.</span> <span class="p-term">' + escapeHtml(w.word) + '</span>';
+      if(w.phonetic){ html += ' <span class="p-phon">' + escapeHtml(w.phonetic) + '</span>'; }
+      html += '</div>';
+
+      (w.meanings || []).forEach(function(m){
+        var defs = (m.definitions || []).slice(0, 3);
+        if(!defs.length){ return; }
+        html += '<div class="p-pos">' + escapeHtml(m.partOfSpeech || "") + '</div>';
+        html += '<ol class="p-defs">';
+        defs.forEach(function(d){
+          html += '<li>' + escapeHtml(d.definition);
+          if(d.example){ html += ' <span class="p-ex">e.g. \u201c' + escapeHtml(d.example) + '\u201d</span>'; }
+          html += '</li>';
+        });
+        html += '</ol>';
+      });
+
+      var syn = [];
+      if(w.related && w.related.synonyms){ syn = w.related.synonyms.slice(0,5); }
+      if(syn.length){ html += '<div class="p-rel"><b>Similar:</b> ' + syn.map(escapeHtml).join(", ") + '</div>'; }
+      if(w.related && w.related.antonyms && w.related.antonyms.length){
+        html += '<div class="p-rel"><b>Opposite:</b> ' + w.related.antonyms.slice(0,4).map(escapeHtml).join(", ") + '</div>';
+      }
+      if(w.translations && (w.translations.hi || w.translations.pa)){
+        var t = [];
+        if(w.translations.hi){ t.push("हिन्दी " + w.translations.hi); }
+        if(w.translations.pa){ t.push("ਪੰਜਾਬੀ " + w.translations.pa); }
+        html += '<div class="p-trans">' + escapeHtml(t.join("   \u00b7   ")) + '</div>';
+      }
+      html += '</div>';
+    });
+
+    html += '</div>';
+    return html;
+  }
+
+  function exportPdf(list){
+    if(!list.length){ return; }
+    document.getElementById("print-area").innerHTML = buildPrintHtml(list);
+    // Give the browser a tick to lay the content out before opening the dialog.
+    setTimeout(function(){ window.print(); }, 60);
+  }
+
+  document.getElementById("export-pdf-btn").addEventListener("click", function(){
+    if(!words.length){ return; }
+    var filter = filterInput.value.trim().toLowerCase();
+    var list = words.slice().sort(function(a,b){ return a.word.localeCompare(b.word); });
+    if(filter){
+      list = list.filter(function(w){ return w.word.toLowerCase().indexOf(filter) >= 0; });
+    }
+    exportPdf(list);
+  });
 
   // ---------- review (flashcards) ----------
   var overlay = document.getElementById("review-overlay");
