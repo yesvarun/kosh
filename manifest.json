@@ -1,0 +1,25 @@
+{
+  "name": "Kosh — Dictionary & Vocabulary",
+  "short_name": "Kosh",
+  "description": "Look up any word from the phone's share sheet, save it, and review saved vocabulary later.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F2EFE7",
+  "theme_color": "#2F5D50",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "share_target": {
+    "action": "./index.html",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  }
+}

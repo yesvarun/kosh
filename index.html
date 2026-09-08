@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kosh — Dictionary &amp; Vocabulary</title>
+<meta name="description" content="Look up words anywhere on your phone, save them, and review them later.">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#2F5D50">
+<link rel="icon" href="./icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="./icon.svg">
+<style>
+  :root{
+    --paper:#F2EFE7;
+    --surface:#FBFAF6;
+    --ink:#1C231F;
+    --ink-soft:#5B665D;
+    --accent:#2F5D50;
+    --accent-soft:#DCE7E0;
+    --gold:#C79A3D;
+    --line:#D8D2C4;
+    --danger:#A6432F;
+    --serif: Georgia, 'Iowan Old Style', 'Times New Roman', serif;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--sans);
+    min-height:100vh;
+    -webkit-tap-highlight-color:transparent;
+  }
+  #app{
+    max-width:560px;
+    margin:0 auto;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    background:var(--paper);
+  }
+  header.top{
+    padding:calc(env(safe-area-inset-top,0px) + 22px) 20px 0 20px;
+  }
+  .brand{
+    font-family:var(--serif);
+    font-style:italic;
+    font-size:26px;
+    letter-spacing:0.2px;
+    margin:0 0 2px 0;
+  }
+  .brand b{font-style:normal; font-weight:700;}
+  .tagline{
+    font-size:13px;
+    color:var(--ink-soft);
+    margin:0 0 16px 0;
+  }
+  nav.tabs{
+    display:flex;
+    padding:0 16px;
+    gap:6px;
+  }
+  nav.tabs button{
+    flex:1;
+    border:none;
+    background:var(--accent-soft);
+    color:var(--ink-soft);
+    font-family:var(--sans);
+    font-size:14px;
+    font-weight:600;
+    padding:10px 8px 12px 8px;
+    border-radius:10px 10px 0 0;
+    cursor:pointer;
+    position:relative;
+    top:1px;
+  }
+  nav.tabs button.active{
+    background:var(--surface);
+    color:var(--ink);
+    box-shadow:0 -1px 0 var(--line) inset;
+  }
+  main{
+    flex:1;
+    background:var(--surface);
+    padding:20px 20px 40px 20px;
+    border-top:1px solid var(--line);
+  }
+  .view{display:none;}
+  .view.active{display:block;}
+
+  /* --- Lookup view --- */
+  .search-row{
+    display:flex;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  input[type="text"]{
+    flex:1;
+    font-family:var(--sans);
+    font-size:16px;
+    padding:12px 14px;
+    border:1px solid var(--line);
+    border-radius:8px;
+    background:var(--paper);
+    color:var(--ink);
+  }
+  input[type="text"]:focus{outline:2px solid var(--accent); outline-offset:1px;}
+  button.primary{
+    font-family:var(--sans);
+    font-size:15px;
+    font-weight:600;
+    background:var(--accent);
+    color:var(--surface);
+    border:none;
+    padding:0 18px;
+    border-radius:8px;
+    cursor:pointer;
+  }
+  button.primary:active{opacity:0.85;}
+  .lang-row{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin-bottom:20px;
+  }
+  .lang-row span{font-size:12px; color:var(--ink-soft);}
+  select{
+    font-family:var(--sans);
+    font-size:13px;
+    padding:5px 8px;
+    border-radius:6px;
+    border:1px solid var(--line);
+    background:var(--paper);
+    color:var(--ink);
+  }
+  .status{
+    font-size:14px;
+    color:var(--ink-soft);
+    padding:20px 0;
+  }
+  .status.error{color:var(--danger);}
+
+  .entry{border-top:1px solid var(--line); padding-top:18px;}
+  .entry-head{display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;}
+  .entry-word{
+    font-family:var(--serif);
+    font-size:32px;
+    font-weight:700;
+    margin:0;
+  }
+  .entry-phon{
+    font-size:15px;
+    color:var(--ink-soft);
+  }
+  .audio-btn{
+    border:1px solid var(--line);
+    background:var(--paper);
+    border-radius:50%;
+    width:30px; height:30px;
+    display:inline-flex; align-items:center; justify-content:center;
+    cursor:pointer;
+    font-size:14px;
+  }
+  .pos{
+    font-family:var(--serif);
+    font-style:italic;
+    font-size:15px;
+    color:var(--accent);
+    margin:18px 0 6px 0;
+  }
+  ol.defs{
+    margin:0;
+    padding-left:20px;
+  }
+  ol.defs li{
+    margin-bottom:8px;
+    font-size:15px;
+    line-height:1.5;
+  }
+  .example{
+    color:var(--ink-soft);
+    font-size:13.5px;
+    font-style:italic;
+  }
+  .synonyms{
+    margin-top:6px;
+    font-size:13px;
+    color:var(--ink-soft);
+  }
+  .synonyms b{color:var(--ink);}
+  .save-btn{
+    margin-top:22px;
+    width:100%;
+    padding:13px;
+    border-radius:8px;
+    border:1px solid var(--accent);
+    background:var(--surface);
+    color:var(--accent);
+    font-family:var(--sans);
+    font-weight:600;
+    font-size:15px;
+    cursor:pointer;
+  }
+  .save-btn.saved{
+    background:var(--accent);
+    color:var(--surface);
+    border-color:var(--accent);
+  }
+  .shared-note{
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin-bottom:14px;
+    padding:8px 10px;
+    background:var(--accent-soft);
+    border-radius:6px;
+  }
+
+  /* --- Saved view --- */
+  .saved-summary{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:16px;
+  }
+  .saved-count{font-size:14px; color:var(--ink-soft);}
+  .saved-count b{color:var(--ink);}
+  .review-btn{
+    background:var(--gold);
+    color:var(--ink);
+    border:none;
+    font-weight:700;
+    font-size:14px;
+    padding:10px 16px;
+    border-radius:8px;
+    cursor:pointer;
+  }
+  .review-btn:disabled{
+    background:var(--line);
+    color:var(--ink-soft);
+    cursor:default;
+  }
+  .filter-row{margin-bottom:14px;}
+  .filter-row input{width:100%;}
+  ul.word-list{list-style:none; margin:0; padding:0;}
+  li.word-row{
+    border-top:1px solid var(--line);
+    padding:12px 0;
+  }
+  li.word-row:last-child{border-bottom:1px solid var(--line);}
+  .word-row-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    cursor:pointer;
+  }
+  .word-row-left{display:flex; align-items:center; gap:10px;}
+  .box-dot{
+    width:8px; height:8px; border-radius:50%;
+    background:var(--line);
+    flex-shrink:0;
+  }
+  .box-dot.due{background:var(--gold);}
+  .word-row-word{font-family:var(--serif); font-size:17px; font-weight:700;}
+  .word-row-pos{font-size:12px; color:var(--ink-soft);}
+  .word-row-del{
+    border:none; background:none; color:var(--danger);
+    font-size:13px; cursor:pointer; padding:4px 6px;
+  }
+  .word-row-body{
+    display:none;
+    padding-top:10px;
+  }
+  .word-row-body.open{display:block;}
+  .empty-state{
+    text-align:center;
+    padding:50px 20px;
+    color:var(--ink-soft);
+  }
+  .empty-state p{font-size:14px; line-height:1.6;}
+
+  /* --- Review overlay --- */
+  #review-overlay{
+    position:fixed;
+    inset:0;
+    background:var(--paper);
+    display:none;
+    flex-direction:column;
+    z-index:50;
+  }
+  #review-overlay.active{display:flex;}
+  .review-top{
+    padding:calc(env(safe-area-inset-top,0px) + 18px) 20px 10px 20px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+  }
+  .review-progress{font-size:13px; color:var(--ink-soft);}
+  .review-close{
+    border:none; background:none; font-size:22px; color:var(--ink-soft); cursor:pointer;
+    line-height:1;
+  }
+  .review-card{
+    flex:1;
+    margin:10px 20px 20px 20px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:14px;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    padding:30px;
+    text-align:center;
+    cursor:pointer;
+  }
+  .review-word{
+    font-family:var(--serif);
+    font-size:34px;
+    font-weight:700;
+  }
+  .review-hint{
+    margin-top:14px;
+    font-size:12px;
+    color:var(--ink-soft);
+  }
+  .review-back{display:none; text-align:left; width:100%;}
+  .review-back.show{display:block;}
+  .review-back .pos{margin-top:14px;}
+  .review-buttons{
+    display:flex;
+    gap:10px;
+    padding:0 20px calc(env(safe-area-inset-bottom,0px) + 20px) 20px;
+  }
+  .review-buttons button{
+    flex:1;
+    padding:15px;
+    border-radius:10px;
+    border:none;
+    font-family:var(--sans);
+    font-weight:700;
+    font-size:15px;
+    cursor:pointer;
+  }
+  .btn-again{background:var(--accent-soft); color:var(--ink);}
+  .btn-good{background:var(--accent); color:var(--surface);}
+  .review-done{
+    text-align:center;
+    padding:30px;
+  }
+  .review-done .brand{margin-bottom:6px;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <header class="top">
+    <p class="brand"><b>Kosh</b> — a dictionary</p>
+    <p class="tagline">Look up a word anywhere. Study it later.</p>
+  </header>
+
+  <nav class="tabs">
+    <button id="tab-lookup" class="active">Lookup</button>
+    <button id="tab-saved">Saved <span id="due-badge"></span></button>
+  </nav>
+
+  <main>
+    <section id="view-lookup" class="view active">
+      <div id="shared-note-slot"></div>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Type a word…" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button class="primary" id="search-btn">Look up</button>
+      </div>
+      <div class="lang-row">
+        <span>Language</span>
+        <select id="lang-select">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+        </select>
+      </div>
+      <div id="result-slot"></div>
+    </section>
+
+    <section id="view-saved" class="view">
+      <div class="saved-summary">
+        <div class="saved-count" id="saved-count">0 words saved</div>
+        <button class="review-btn" id="start-review-btn" disabled>Start review</button>
+      </div>
+      <div class="filter-row">
+        <input type="text" id="filter-input" placeholder="Filter saved words…" autocomplete="off">
+      </div>
+      <div id="saved-list-slot"></div>
+    </section>
+  </main>
+</div>
+
+<div id="review-overlay">
+  <div class="review-top">
+    <span class="review-progress" id="review-progress"></span>
+    <button class="review-close" id="review-close">✕</button>
+  </div>
+  <div id="review-body-slot" style="flex:1; display:flex; flex-direction:column;"></div>
+</div>
+
+<audio id="audio-player"></audio>
+
+<script>
+(function(){
+  "use strict";
+
+  var STORAGE_KEY = "kosh_words_v1";
+  var BOX_INTERVAL_DAYS = {1:0, 2:1, 3:3, 4:7, 5:14};
+
+  // ---------- storage ----------
+  function loadWords(){
+    try{
+      var raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    }catch(e){ return []; }
+  }
+  function saveWords(list){
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  }
+  function wordId(word, lang){ return lang + ":" + word.toLowerCase(); }
+
+  var words = loadWords();
+
+  // ---------- tabs ----------
+  var tabLookup = document.getElementById("tab-lookup");
+  var tabSaved = document.getElementById("tab-saved");
+  var viewLookup = document.getElementById("view-lookup");
+  var viewSaved = document.getElementById("view-saved");
+
+  function showTab(name){
+    if(name === "saved"){
+      tabSaved.classList.add("active");
+      tabLookup.classList.remove("active");
+      viewSaved.classList.add("active");
+      viewLookup.classList.remove("active");
+      renderSavedList();
+    } else {
+      tabLookup.classList.add("active");
+      tabSaved.classList.remove("active");
+      viewLookup.classList.add("active");
+      viewSaved.classList.remove("active");
+    }
+  }
+  tabLookup.addEventListener("click", function(){ showTab("lookup"); });
+  tabSaved.addEventListener("click", function(){ showTab("saved"); });
+
+  // ---------- lookup ----------
+  var searchInput = document.getElementById("search-input");
+  var searchBtn = document.getElementById("search-btn");
+  var langSelect = document.getElementById("lang-select");
+  var resultSlot = document.getElementById("result-slot");
+  var audioPlayer = document.getElementById("audio-player");
+
+  var currentEntryData = null; // {word, lang, phonetic, audio, meanings}
+
+  function apiCodeForLang(lang){
+    return lang === "hi" ? "hi" : "en";
+  }
+
+  function lookup(word, lang){
+    word = (word || "").trim();
+    if(!word){ return; }
+    lang = lang || langSelect.value;
+    resultSlot.innerHTML = '<p class="status">Looking up “' + escapeHtml(word) + '”…</p>';
+    var url = "https://api.dictionaryapi.dev/api/v2/entries/" + apiCodeForLang(lang) + "/" + encodeURIComponent(word);
+    fetch(url).then(function(res){
+      if(!res.ok){ throw new Error("not-found"); }
+      return res.json();
+    }).then(function(data){
+      renderEntry(data[0], lang);
+    }).catch(function(){
+      resultSlot.innerHTML = '<p class="status error">No definition found for “' + escapeHtml(word) + '”. Check the spelling, or try switching the language above.</p>';
+      currentEntryData = null;
+    });
+  }
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, function(c){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+    });
+  }
+
+  function renderEntry(entry, lang){
+    var phonetic = entry.phonetic || "";
+    var audio = "";
+    if(entry.phonetics){
+      for(var i=0;i<entry.phonetics.length;i++){
+        if(entry.phonetics[i].audio){ audio = entry.phonetics[i].audio; }
+        if(!phonetic && entry.phonetics[i].text){ phonetic = entry.phonetics[i].text; }
+      }
+    }
+    var meanings = (entry.meanings || []).map(function(m){
+      return {
+        partOfSpeech: m.partOfSpeech,
+        definitions: (m.definitions || []).slice(0,4).map(function(d){
+          return { definition: d.definition, example: d.example || "" };
+        }),
+        synonyms: (m.synonyms || []).slice(0,6)
+      };
+    });
+
+    currentEntryData = {
+      word: entry.word,
+      lang: lang,
+      phonetic: phonetic,
+      audio: audio,
+      meanings: meanings
+    };
+
+    var html = '<div class="entry">';
+    html += '<div class="entry-head"><h2 class="entry-word">' + escapeHtml(entry.word) + '</h2>';
+    if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
+    if(audio){ html += '<button class="audio-btn" id="play-audio-btn" title="Play pronunciation">▶</button>'; }
+    html += '</div>';
+
+    meanings.forEach(function(m){
+      html += '<div class="pos">' + escapeHtml(m.partOfSpeech || "") + '</div>';
+      html += '<ol class="defs">';
+      m.definitions.forEach(function(d){
+        html += '<li>' + escapeHtml(d.definition);
+        if(d.example){ html += '<div class="example">“' + escapeHtml(d.example) + '”</div>'; }
+        html += '</li>';
+      });
+      html += '</ol>';
+      if(m.synonyms.length){
+        html += '<div class="synonyms"><b>Synonyms:</b> ' + m.synonyms.map(escapeHtml).join(", ") + '</div>';
+      }
+    });
+
+    var already = words.some(function(w){ return w.id === wordId(entry.word, lang); });
+    html += '<button class="save-btn' + (already ? ' saved' : '') + '" id="save-btn">' + (already ? "Saved ✓ — tap to remove" : "Save for later") + '</button>';
+    html += '</div>';
+
+    resultSlot.innerHTML = html;
+
+    if(audio){
+      document.getElementById("play-audio-btn").addEventListener("click", function(){
+        audioPlayer.src = audio;
+        audioPlayer.play();
+      });
+    }
+    document.getElementById("save-btn").addEventListener("click", toggleSaveCurrent);
+  }
+
+  function toggleSaveCurrent(){
+    if(!currentEntryData){ return; }
+    var id = wordId(currentEntryData.word, currentEntryData.lang);
+    var idx = words.findIndex(function(w){ return w.id === id; });
+    if(idx >= 0){
+      words.splice(idx, 1);
+    } else {
+      words.push({
+        id: id,
+        word: currentEntryData.word,
+        lang: currentEntryData.lang,
+        phonetic: currentEntryData.phonetic,
+        audio: currentEntryData.audio,
+        meanings: currentEntryData.meanings,
+        savedAt: Date.now(),
+        box: 1,
+        nextReview: Date.now(),
+        lastReviewed: null
+      });
+    }
+    saveWords(words);
+    renderEntry.lastLang = currentEntryData.lang;
+    var savedNow = idx < 0;
+    var btn = document.getElementById("save-btn");
+    btn.textContent = savedNow ? "Saved ✓ — tap to remove" : "Save for later";
+    btn.classList.toggle("saved", savedNow);
+    updateDueBadge();
+  }
+
+  searchBtn.addEventListener("click", function(){ lookup(searchInput.value); });
+  searchInput.addEventListener("keydown", function(e){
+    if(e.key === "Enter"){ lookup(searchInput.value); }
+  });
+
+  // ---------- saved / study view ----------
+  var savedCountEl = document.getElementById("saved-count");
+  var savedListSlot = document.getElementById("saved-list-slot");
+  var startReviewBtn = document.getElementById("start-review-btn");
+  var filterInput = document.getElementById("filter-input");
+  var dueBadge = document.getElementById("due-badge");
+
+  function dueWords(){
+    var now = Date.now();
+    return words.filter(function(w){ return w.nextReview <= now; });
+  }
+
+  function updateDueBadge(){
+    var n = dueWords().length;
+    dueBadge.textContent = n > 0 ? "(" + n + ")" : "";
+    startReviewBtn.disabled = n === 0;
+    savedCountEl.innerHTML = words.length + (words.length === 1 ? " word saved" : " words saved") +
+      (n > 0 ? " · <b>" + n + " due</b>" : "");
+  }
+
+  function renderSavedList(){
+    updateDueBadge();
+    var filter = filterInput.value.trim().toLowerCase();
+    var list = words.slice().sort(function(a,b){ return b.savedAt - a.savedAt; });
+    if(filter){
+      list = list.filter(function(w){ return w.word.toLowerCase().indexOf(filter) >= 0; });
+    }
+    if(list.length === 0){
+      savedListSlot.innerHTML = words.length === 0
+        ? '<div class="empty-state"><p>Nothing saved yet. Look up a word, or select text anywhere on your phone and share it to Kosh.</p></div>'
+        : '<div class="empty-state"><p>No saved words match that filter.</p></div>';
+      return;
+    }
+    var now = Date.now();
+    var html = '<ul class="word-list">';
+    list.forEach(function(w){
+      var isDue = w.nextReview <= now;
+      var firstPos = w.meanings && w.meanings[0] ? w.meanings[0].partOfSpeech : "";
+      html += '<li class="word-row" data-id="' + w.id + '">';
+      html += '<div class="word-row-head">';
+      html += '<div class="word-row-left"><span class="box-dot' + (isDue ? ' due' : '') + '"></span>';
+      html += '<div><div class="word-row-word">' + escapeHtml(w.word) + '</div>';
+      html += '<div class="word-row-pos">' + escapeHtml(firstPos || "") + '</div></div></div>';
+      html += '<button class="word-row-del" data-id="' + w.id + '">Remove</button>';
+      html += '</div>';
+      html += '<div class="word-row-body" id="body-' + w.id.replace(/[^a-zA-Z0-9]/g,'_') + '">' + renderMeaningsHtml(w.meanings) + '</div>';
+      html += '</li>';
+    });
+    html += '</ul>';
+    savedListSlot.innerHTML = html;
+
+    Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-head"), function(el){
+      el.addEventListener("click", function(e){
+        if(e.target.classList.contains("word-row-del")){ return; }
+        var row = el.closest(".word-row");
+        var body = row.querySelector(".word-row-body");
+        body.classList.toggle("open");
+      });
+    });
+    Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-del"), function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = el.getAttribute("data-id");
+        words = words.filter(function(w){ return w.id !== id; });
+        saveWords(words);
+        renderSavedList();
+      });
+    });
+  }
+
+  function renderMeaningsHtml(meanings){
+    var html = "";
+    (meanings || []).forEach(function(m){
+      html += '<div class="pos">' + escapeHtml(m.partOfSpeech || "") + '</div>';
+      html += '<ol class="defs">';
+      (m.definitions || []).forEach(function(d){
+        html += '<li>' + escapeHtml(d.definition);
+        if(d.example){ html += '<div class="example">“' + escapeHtml(d.example) + '”</div>'; }
+        html += '</li>';
+      });
+      html += '</ol>';
+      if(m.synonyms && m.synonyms.length){
+        html += '<div class="synonyms"><b>Synonyms:</b> ' + m.synonyms.map(escapeHtml).join(", ") + '</div>';
+      }
+    });
+    return html;
+  }
+
+  filterInput.addEventListener("input", renderSavedList);
+
+  // ---------- review (flashcards) ----------
+  var overlay = document.getElementById("review-overlay");
+  var reviewProgress = document.getElementById("review-progress");
+  var reviewBodySlot = document.getElementById("review-body-slot");
+  var reviewCloseBtn = document.getElementById("review-close");
+
+  var reviewQueue = [];
+  var reviewIndex = 0;
+  var reviewFlipped = false;
+
+  function startReview(){
+    reviewQueue = dueWords().slice();
+    reviewIndex = 0;
+    if(reviewQueue.length === 0){ return; }
+    overlay.classList.add("active");
+    renderReviewStep();
+  }
+
+  function renderReviewStep(){
+    if(reviewIndex >= reviewQueue.length){
+      reviewBodySlot.innerHTML = '<div class="review-done"><p class="brand"><b>Kosh</b></p><p>Review done. ' + reviewQueue.length + ' word' + (reviewQueue.length===1?'':'s') + ' reviewed.</p></div>';
+      reviewProgress.textContent = "";
+      return;
+    }
+    reviewFlipped = false;
+    var w = reviewQueue[reviewIndex];
+    reviewProgress.textContent = (reviewIndex+1) + " / " + reviewQueue.length;
+
+    var html = '<div class="review-card" id="review-card">';
+    html += '<div class="review-word">' + escapeHtml(w.word) + '</div>';
+    html += '<div class="review-hint" id="review-hint">Tap the card to reveal the definition</div>';
+    html += '<div class="review-back" id="review-back">' + renderMeaningsHtml(w.meanings) + '</div>';
+    html += '</div>';
+    html += '<div class="review-buttons" id="review-buttons" style="visibility:hidden;">';
+    html += '<button class="btn-again" id="btn-again">Still learning</button>';
+    html += '<button class="btn-good" id="btn-good">Got it</button>';
+    html += '</div>';
+    reviewBodySlot.innerHTML = html;
+
+    document.getElementById("review-card").addEventListener("click", function(){
+      if(reviewFlipped){ return; }
+      reviewFlipped = true;
+      document.getElementById("review-back").classList.add("show");
+      document.getElementById("review-hint").style.display = "none";
+      document.getElementById("review-buttons").style.visibility = "visible";
+    });
+    document.getElementById("btn-again").addEventListener("click", function(){ answerReview(false); });
+    document.getElementById("btn-good").addEventListener("click", function(){ answerReview(true); });
+  }
+
+  function answerReview(good){
+    var w = reviewQueue[reviewIndex];
+    var master = words.find(function(x){ return x.id === w.id; });
+    if(master){
+      if(good){
+        master.box = Math.min(5, (master.box || 1) + 1);
+      } else {
+        master.box = 1;
+      }
+      master.lastReviewed = Date.now();
+      var days = BOX_INTERVAL_DAYS[master.box] || 0;
+      master.nextReview = Date.now() + days * 24 * 60 * 60 * 1000;
+      saveWords(words);
+    }
+    reviewIndex++;
+    renderReviewStep();
+  }
+
+  reviewCloseBtn.addEventListener("click", function(){
+    overlay.classList.remove("active");
+    renderSavedList();
+  });
+  startReviewBtn.addEventListener("click", startReview);
+
+  // ---------- share target handling ----------
+  function handleShareParams(){
+    var params = new URLSearchParams(window.location.search);
+    var sharedText = params.get("text") || params.get("title") || "";
+    if(!sharedText){ return; }
+    var match = sharedText.match(/[A-Za-z\u0900-\u097F'-]{2,}/);
+    var query = match ? match[0] : sharedText.trim();
+    var noteSlot = document.getElementById("shared-note-slot");
+    noteSlot.innerHTML = '<div class="shared-note">Shared to Kosh: “' + escapeHtml(sharedText.length > 80 ? sharedText.slice(0,80)+"…" : sharedText) + '” — looking up “' + escapeHtml(query) + '”.</div>';
+    searchInput.value = query;
+    // guess language: if text contains Devanagari, use Hindi
+    if(/[\u0900-\u097F]/.test(sharedText)){ langSelect.value = "hi"; }
+    lookup(query, langSelect.value);
+    history.replaceState({}, "", window.location.pathname);
+  }
+
+  // ---------- service worker ----------
+  if("serviceWorker" in navigator){
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("./sw.js").catch(function(){});
+    });
+  }
+
+  updateDueBadge();
+  handleShareParams();
+})();
+</script>
+</body>
+</html>
