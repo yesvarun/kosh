@@ -248,6 +248,32 @@
     display:inline-flex; align-items:center; justify-content:center;
     cursor:pointer;
     font-size:14px;
+    color:var(--accent);
+    flex-shrink:0;
+  }
+  .audio-btn:active{background:var(--accent-soft);}
+  .audio-btn.small{width:26px; height:26px; font-size:11px;}
+  .syllables{
+    font-size:12px;
+    color:var(--ink-soft);
+  }
+  .accent-tag{
+    font-size:11px;
+    color:var(--ink-soft);
+    border:1px solid var(--line);
+    border-radius:9px;
+    padding:1px 7px;
+  }
+  .word-row-actions{
+    display:flex;
+    align-items:center;
+    gap:4px;
+    flex-shrink:0;
+  }
+  .review-speak{
+    width:38px; height:38px;
+    font-size:15px;
+    margin-top:16px;
   }
   .pos{
     font-family:var(--serif);
@@ -706,6 +732,40 @@
     });
   }
 
+  // Pronunciation fallback. dictionaryapi.dev only has IPA/audio for the small
+  // set of words it covers, so for everything else we ask Datamuse for the IPA
+  // transcription and syllable count (qe=sp echoes the queried word back so we
+  // get metadata for that exact word rather than a near match).
+  function fetchPronunciation(word){
+    var url = "https://api.datamuse.com/words?sp=" + encodeURIComponent(word) +
+              "&qe=sp&md=rs&ipa=1&max=1";
+    return fetch(url).then(function(r){ return r.ok ? r.json() : []; })
+      .then(function(list){
+        if(!list.length || !list[0].tags){ return {}; }
+        var out = {};
+        list[0].tags.forEach(function(t){
+          if(t.indexOf("pron:") === 0){ out.phonetic = "/" + t.slice(5) + "/"; }
+        });
+        if(list[0].numSyllables){ out.syllables = list[0].numSyllables; }
+        return out;
+      }).catch(function(){ return {}; });
+  }
+
+  // Speaks the word using the phone's own text-to-speech. Always available,
+  // works with no network, and covers every word — unlike the recorded mp3s,
+  // which exist only for a fraction of entries.
+  function speakWord(word, lang){
+    if(!("speechSynthesis" in window)){ return false; }
+    try{
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(word);
+      u.lang = (lang === "hi") ? "hi-IN" : "en-GB";
+      u.rate = 0.85;
+      window.speechSynthesis.speak(u);
+      return true;
+    }catch(e){ return false; }
+  }
+
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, function(c){
       return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
@@ -760,12 +820,28 @@
       if(!res.ok){ return {status:"not-found"}; }
       return res.json().then(function(data){
         var e = data[0];
-        var phonetic = e.phonetic || "";
-        var audio = "";
+        // dictionaryapi.dev serves several recordings per word, named "..._gb_1.mp3",
+        // "..._us_1.mp3" etc. Prefer British; fall back to whatever exists.
+        var audio = "", audioAccent = "";
+        var phonetic = "", phoneticGb = "";
         (e.phonetics || []).forEach(function(p){
-          if(p.audio){ audio = p.audio; }
-          if(!phonetic && p.text){ phonetic = p.text; }
+          var src = p.audio || "";
+          var isGb = /-gb|_gb|\/uk\//i.test(src);
+          if(src){
+            if(isGb && audioAccent !== "British"){
+              // British always wins, even if a US recording was seen first.
+              audio = src; audioAccent = "British";
+            } else if(!audio){
+              audio = src; audioAccent = /-us|_us/i.test(src) ? "American" : "";
+            }
+          }
+          if(p.text){
+            if(isGb && !phoneticGb){ phoneticGb = p.text; }
+            if(!phonetic){ phonetic = p.text; }
+          }
         });
+        phonetic = phoneticGb || e.phonetic || phonetic;
+
         var meanings = (e.meanings || []).map(function(m){
           return {
             partOfSpeech: m.partOfSpeech,
@@ -775,9 +851,60 @@
             synonyms: (m.synonyms || []).slice(0,6)
           };
         });
-        return { status:"found", entry: { word: e.word, phonetic: phonetic, audio: audio, meanings: meanings } };
+        return { status:"found", entry: {
+          word: e.word, phonetic: phonetic, audio: audio,
+          audioAccent: audioAccent, meanings: meanings
+        } };
       });
     }).catch(function(){ return {status:"error"}; });
+  }
+
+  // IPA fallback when dictionaryapi.dev has no entry. Datamuse returns the
+  // pronunciation in the tags array prefixed with "pron:", plus syllable count.
+  function fetchIpa(word){
+    var url = "https://api.datamuse.com/words?sp=" + encodeURIComponent(word) + "&qe=sp&md=rs&ipa=1&max=1";
+    return fetch(url).then(function(r){ return r.ok ? r.json() : []; }).then(function(list){
+      if(!list.length){ return {}; }
+      var tags = list[0].tags || [];
+      var out = { syllables: list[0].numSyllables };
+      tags.forEach(function(t){
+        if(t.indexOf("pron:") === 0){ out.phonetic = "/" + t.slice(5) + "/"; }
+      });
+      return out;
+    }).catch(function(){ return {}; });
+  }
+
+  // ---- British voice, spoken on the device. Works with no network at all, and
+  // covers every word — including ones with no recording on dictionaryapi.dev.
+  var britishVoice = null;
+  function pickBritishVoice(){
+    if(!("speechSynthesis" in window)){ return null; }
+    var voices = window.speechSynthesis.getVoices() || [];
+    // Exact en-GB first, then any English voice with a British-sounding name.
+    britishVoice = voices.filter(function(v){ return /^en[-_]GB$/i.test(v.lang); })[0]
+                || voices.filter(function(v){ return /en[-_]GB/i.test(v.lang); })[0]
+                || voices.filter(function(v){ return /UK English|British|Daniel|Serena|Kate|Arthur/i.test(v.name); })[0]
+                || null;
+    return britishVoice;
+  }
+  if("speechSynthesis" in window){
+    pickBritishVoice();
+    // Android populates the voice list asynchronously.
+    window.speechSynthesis.onvoiceschanged = pickBritishVoice;
+  }
+
+  function speak(word){
+    if(!("speechSynthesis" in window)){ return false; }
+    try{
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(word);
+      u.lang = "en-GB";
+      var v = britishVoice || pickBritishVoice();
+      if(v){ u.voice = v; }
+      u.rate = 0.9;
+      window.speechSynthesis.speak(u);
+      return true;
+    }catch(e){ return false; }
   }
 
   // Datamuse: word relationships. Free and keyless today; Datamuse has announced
@@ -847,7 +974,8 @@
     var onlinePromise = (navigator.onLine === false) ? null : Promise.all([
       fetchWiktionary(word, lang),
       fetchDictApi(word, lang),
-      fetchRelated(word)
+      fetchRelated(word),
+      fetchIpa(word)
     ]);
 
     // Offline shard usually resolves in a few milliseconds — paint it at once.
@@ -877,9 +1005,12 @@
     onlinePromise.then(function(res){
       var merged = mergeEntries(res[0], res[1], word);
       var related = res[2];
+      var ipa = res[3] || {};
 
       if(merged){
         merged.related = related;
+        if(!merged.phonetic && ipa.phonetic){ merged.phonetic = ipa.phonetic; }
+        if(ipa.syllables){ merged.syllables = ipa.syllables; }
         if(offlineShown){
           appendOnlineEntry(merged, lang);
         } else {
@@ -937,16 +1068,20 @@
 
     var html = '<div class="entry' + (opts.compact ? ' entry-compact' : '') + '">';
 
+    var pronBits = "";
+    if(phonetic){ pronBits += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
+    if(entry.syllables){ pronBits += '<span class="syllables">' + entry.syllables + (entry.syllables === 1 ? " syllable" : " syllables") + '</span>'; }
+    // The button is always offered: with a recording when one exists, otherwise
+    // the phone's own British voice, which also works with no signal.
+    pronBits += '<button class="audio-btn" data-role="speak" title="Hear it in British English">\u25B6</button>';
+    if(entry.audio && entry.audioAccent){
+      pronBits += '<span class="accent-tag">' + escapeHtml(entry.audioAccent) + '</span>';
+    }
+
     if(!opts.hideHead){
-      html += '<div class="entry-head"><h2 class="entry-word">' + escapeHtml(entry.word) + '</h2>';
-      if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
-      if(audio){ html += '<button class="audio-btn" title="Play pronunciation">\u25B6</button>'; }
-      html += '</div>';
-    } else if(phonetic || audio){
-      html += '<div class="entry-head">';
-      if(phonetic){ html += '<span class="entry-phon">' + escapeHtml(phonetic) + '</span>'; }
-      if(audio){ html += '<button class="audio-btn" title="Play pronunciation">\u25B6</button>'; }
-      html += '</div>';
+      html += '<div class="entry-head"><h2 class="entry-word">' + escapeHtml(entry.word) + '</h2>' + pronBits + '</div>';
+    } else if(pronBits){
+      html += '<div class="entry-head">' + pronBits + '</div>';
     }
 
     meanings.forEach(function(m){
@@ -988,10 +1123,18 @@
   // Attaches handlers to whatever was just inserted into `container`.
   function bindEntry(container, entry, lang){
     var audio = entry.audio || "";
-    Array.prototype.forEach.call(container.querySelectorAll(".audio-btn"), function(b){
+    var word = entry.word || "";
+    Array.prototype.forEach.call(container.querySelectorAll('[data-role="speak"]'), function(b){
       b.addEventListener("click", function(){
-        audioPlayer.src = audio;
-        audioPlayer.play();
+        if(audio){
+          audioPlayer.src = audio;
+          // If the recording won't load, speak it instead rather than doing nothing.
+          audioPlayer.onerror = function(){ speak(word); };
+          var p = audioPlayer.play();
+          if(p && p.catch){ p.catch(function(){ speak(word); }); }
+        } else {
+          speak(word);
+        }
       });
     });
     Array.prototype.forEach.call(container.querySelectorAll(".rel-word"), function(b){
@@ -1029,6 +1172,8 @@
       lang: lang,
       phonetic: entry.phonetic || "",
       audio: entry.audio || "",
+      audioAccent: entry.audioAccent || "",
+      syllables: entry.syllables || null,
       meanings: entry.meanings || []
     };
     saveEntry(currentEntryData, lang);
@@ -1059,13 +1204,15 @@
     var existing = words.find(function(w){ return w.id === id; });
     if(existing){
       existing.meanings = entry.meanings || existing.meanings;
-      existing.phonetic = existing.phonetic || entry.phonetic || "";
-      existing.audio = existing.audio || entry.audio || "";
+      existing.phonetic = entry.phonetic || existing.phonetic || "";
+      existing.audio = entry.audio || existing.audio || "";
+      existing.syllables = entry.syllables || existing.syllables || null;
       saveWords(words);
     }
     currentEntryData = {
       word: entry.word, lang: lang,
       phonetic: entry.phonetic || "", audio: entry.audio || "",
+      audioAccent: entry.audioAccent || "", syllables: entry.syllables || null,
       meanings: entry.meanings || []
     };
     bindEntry(block, entry, lang);
@@ -1180,7 +1327,10 @@
       html += '<div class="word-row-left"><span class="box-dot' + (isDue ? ' due' : '') + '"></span>';
       html += '<div><div class="word-row-word">' + escapeHtml(w.word) + '</div>';
       html += '<div class="word-row-pos">' + escapeHtml(firstPos || "") + '</div></div></div>';
+      html += '<div class="word-row-actions">';
+      html += '<button class="audio-btn small" data-speak="' + w.id + '" title="Hear it">▶</button>';
       html += '<button class="word-row-del" data-id="' + w.id + '">Remove</button>';
+      html += '</div>';
       html += '</div>';
       html += '<div class="word-row-body">' + renderMeaningsHtml(w.meanings) + '</div>';
       html += '</li>';
@@ -1191,9 +1341,16 @@
     Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-head"), function(el){
       el.addEventListener("click", function(e){
         if(e.target.classList.contains("word-row-del")){ return; }
+        if(e.target.hasAttribute && e.target.hasAttribute("data-speak")){ return; }
         var row = el.closest(".word-row");
         var body = row.querySelector(".word-row-body");
         body.classList.toggle("open");
+      });
+    });
+    Array.prototype.forEach.call(savedListSlot.querySelectorAll("[data-speak]"), function(el){
+      el.addEventListener("click", function(e){
+        e.stopPropagation();
+        speakSaved(el.getAttribute("data-speak"));
       });
     });
     Array.prototype.forEach.call(savedListSlot.querySelectorAll(".word-row-del"), function(el){
@@ -1223,6 +1380,20 @@
       }
     });
     return html;
+  }
+
+  // Plays a saved word: its recording if one was captured, else the British voice.
+  function speakSaved(id){
+    var w = words.find(function(x){ return x.id === id; });
+    if(!w){ return; }
+    if(w.audio){
+      audioPlayer.src = w.audio;
+      audioPlayer.onerror = function(){ speak(w.word); };
+      var p = audioPlayer.play();
+      if(p && p.catch){ p.catch(function(){ speak(w.word); }); }
+    } else {
+      speak(w.word);
+    }
   }
 
   filterInput.addEventListener("input", renderSavedList);
@@ -1257,6 +1428,7 @@
 
     var html = '<div class="review-card" id="review-card">';
     html += '<div class="review-word">' + escapeHtml(w.word) + '</div>';
+    html += '<button class="audio-btn review-speak" id="review-speak" title="Hear it">▶</button>';
     html += '<div class="review-hint" id="review-hint">Tap the card to reveal the definition</div>';
     html += '<div class="review-back" id="review-back">' + renderMeaningsHtml(w.meanings) + '</div>';
     html += '</div>';
@@ -1272,6 +1444,10 @@
       document.getElementById("review-back").classList.add("show");
       document.getElementById("review-hint").style.display = "none";
       document.getElementById("review-buttons").style.visibility = "visible";
+    });
+    document.getElementById("review-speak").addEventListener("click", function(e){
+      e.stopPropagation();
+      speakSaved(w.id);
     });
     document.getElementById("btn-again").addEventListener("click", function(){ answerReview(false); });
     document.getElementById("btn-good").addEventListener("click", function(){ answerReview(true); });
