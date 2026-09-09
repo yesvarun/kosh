@@ -115,14 +115,17 @@
     line-height:1;
   }
   .theme-row{
-    display:flex;
-    gap:6px;
+    display:block;
     margin-bottom:14px;
-    overflow-x:auto;
-    -webkit-overflow-scrolling:touch;
-    padding-bottom:2px;
   }
   .theme-row[hidden]{display:none;}
+  .swatch-strip{
+    display:flex;
+    gap:6px;
+    overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
+    padding-bottom:8px;
+  }
   .swatch{
     flex:0 0 auto;
     display:inline-flex;
@@ -262,7 +265,7 @@
     align-items:center;
     justify-content:space-between;
     gap:10px;
-    margin:-10px 0 20px 0;
+    margin:0;
     padding:9px 11px;
     background:var(--accent-soft);
     border-radius:7px;
@@ -700,10 +703,16 @@
       <button id="theme-toggle" class="theme-toggle" title="Reading theme" aria-label="Reading theme">◐</button>
     </div>
     <div id="theme-row" class="theme-row" hidden>
-      <button class="swatch" data-theme-set="paper"><span class="dot dot-paper"></span>Paper</button>
-      <button class="swatch" data-theme-set="sepia"><span class="dot dot-sepia"></span>Sepia</button>
-      <button class="swatch" data-theme-set="oldpaper"><span class="dot dot-oldpaper"></span>Old paper</button>
-      <button class="swatch" data-theme-set="charcoal"><span class="dot dot-charcoal"></span>Charcoal</button>
+      <div class="swatch-strip">
+        <button class="swatch" data-theme-set="paper"><span class="dot dot-paper"></span>Paper</button>
+        <button class="swatch" data-theme-set="sepia"><span class="dot dot-sepia"></span>Sepia</button>
+        <button class="swatch" data-theme-set="oldpaper"><span class="dot dot-oldpaper"></span>Old paper</button>
+        <button class="swatch" data-theme-set="charcoal"><span class="dot dot-charcoal"></span>Charcoal</button>
+      </div>
+      <div class="offline-row">
+        <span id="offline-status">Offline dictionary: checking…</span>
+        <button id="offline-btn" style="display:none;">Download</button>
+      </div>
     </div>
   </header>
 
@@ -715,7 +724,6 @@
   <main>
     <section id="view-lookup" class="view active">
       <div id="protocol-warning-slot"></div>
-      <div id="shared-note-slot"></div>
       <div class="search-row">
         <input type="text" id="search-input" placeholder="Type a word…" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="search" enterkeyhint="search">
         <button class="primary" id="search-btn">Look up</button>
@@ -726,10 +734,6 @@
           <option value="en">English</option>
           <option value="hi">Hindi</option>
         </select>
-      </div>
-      <div class="offline-row">
-        <span id="offline-status">Offline dictionary: checking…</span>
-        <button id="offline-btn" style="display:none;">Download</button>
       </div>
       <div id="result-slot"></div>
     </section>
@@ -2025,13 +2029,14 @@
     var params = new URLSearchParams(window.location.search);
     var sharedText = params.get("text") || params.get("title") || "";
     if(!sharedText){ return; }
-    var match = sharedText.match(/[A-Za-z\u0900-\u097F'-]{2,}/);
-    var query = match ? match[0] : sharedText.trim();
-    var noteSlot = document.getElementById("shared-note-slot");
-    noteSlot.innerHTML = '<div class="shared-note">Shared to Kosh: “' + escapeHtml(sharedText.length > 80 ? sharedText.slice(0,80)+"…" : sharedText) + '” — looking up “' + escapeHtml(query) + '”.</div>';
+    // Shared text often arrives with a trailing URL (e.g. "coax https://...").
+    // Strip URLs first, then take the first real word — silently.
+    var cleaned = sharedText.replace(/https?:\/\/\S+/g, " ").replace(/["“”'']/g, " ");
+    var match = cleaned.match(/[A-Za-z\u0900-\u097F\u0A00-\u0A7F'-]{2,}/);
+    var query = match ? match[0] : cleaned.trim();
+    if(!query){ return; }
     searchInput.value = query;
-    // guess language: if text contains Devanagari, use Hindi
-    if(/[\u0900-\u097F]/.test(sharedText)){ langSelect.value = "hi"; }
+    if(/[\u0900-\u097F]/.test(query)){ langSelect.value = "hi"; }
     lookup(query, langSelect.value);
     history.replaceState({}, "", window.location.pathname);
   }
